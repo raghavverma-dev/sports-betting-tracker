@@ -1,19 +1,21 @@
 # BetEdge
 
-BetEdge is a full-stack paper-trading and sports-market analytics
+BetEdge is a full-stack sports-market analytics and bet-tracking
 platform. It pulls live odds from US sportsbooks, computes de-vigged
-market probabilities, ranks potential bets by expected value, tracks a
-paper bankroll, and runs backtests that score strategies on both
-**forecast quality** (Brier score, log loss, calibration) and
-**portfolio outcomes** (ROI, max drawdown).
+market probabilities, ranks potential bets by expected value, tracks
+simulated or manually recorded bankroll performance, and runs backtests
+that score strategies on both **forecast quality** (Brier score, log
+loss, calibration) and **portfolio outcomes** (ROI, max drawdown).
 
 The backend is Python 3.12 + FastAPI + Postgres + SQLAlchemy 2.0 with
 Alembic-managed migrations and a Click-based CLI for offline runs. The
 frontend is React 19 + TypeScript + Vite, reading from the backend for
 backtests, live odds, manual bet tracking, and bankroll history.
 
-No real money moves. No user accounts. Everything is runnable locally
-with `docker compose up`.
+The app is designed for paper trading by default, but the tracker can
+also be used as a manual journal for real wagers. It does not execute
+bets, connect to sportsbooks for account actions, or move funds.
+Everything is runnable locally with `docker compose up`.
 
 ## Why This Exists
 
@@ -24,7 +26,8 @@ frontend UX, backend API design, and quantitative engineering:
 - Convert American odds into implied probabilities.
 - Remove sportsbook vig to estimate fair market probability.
 - Compare market consensus to the best available line.
-- Track paper bets and bankroll movement through an auditable ledger.
+- Track simulated or real-world wager decisions through an auditable
+  bankroll ledger.
 - Evaluate strategies with both statistical and portfolio metrics.
 
 ## Tech Stack
@@ -83,7 +86,7 @@ frontend UX, backend API design, and quantitative engineering:
   the UI remains usable if the backend is offline.
 - `ValueFinder` calls the backend live-odds proxy so The Odds API key
   can stay in backend configuration instead of browser storage.
-- `AiBettor` remains a browser-side paper simulator for now.
+- `AiBettor` remains a browser-side simulation tool for now.
 
 ## Quick start (full stack)
 
@@ -165,14 +168,14 @@ pip install -e '.[ml]'   # pulls nba_api, openpyxl, lightgbm, etc.
 This is the path to show in a 2-3 minute recruiting demo:
 
 1. **Dashboard** — start with `Load Sample Data` if the browser has no
-   bets yet. The sample rows are synthetic paper bets, included so the
+   bets yet. The sample rows are synthetic tracked bets, included so the
    bankroll, ROI, recent-bets table, and charts are visible immediately.
 2. **Value Finder** — add a free The Odds API key to backend `.env`, then
    fetch live sportsbook odds through the FastAPI proxy. The ranked board de-vigs each market,
    estimates the market's fair probability, compares that to the best
    available line, and sorts opportunities by expected value.
 3. **Track a live line** — click `Track` on a Value Finder row, enter a
-   paper stake, and the app saves that live opportunity as a pending bet
+   stake, and the app saves that live opportunity as a pending bet
    in the Bet Tracker. The tracked bet keeps the sportsbook, odds,
    market probability, and EV context in its notes.
 4. **Bet Tracker / Dashboard** — settle tracked paper bets as won, lost,
@@ -183,17 +186,18 @@ This is the path to show in a 2-3 minute recruiting demo:
 
 Recruiter pitch:
 
-> BetEdge is a full-stack sports-betting analytics and paper-trading
+> BetEdge is a full-stack sports-betting analytics and bet-tracking
 > platform. It ingests live sportsbook odds, normalizes American odds
 > into implied probabilities, removes vig to estimate market consensus,
-> ranks potential bets by expected value, and lets users track paper
-> bets, bankroll, ROI, and backtested strategy performance.
+> ranks potential bets by expected value, and lets users track simulated
+> or manually recorded bets, bankroll, ROI, and backtested strategy
+> performance.
 
 ## Portfolio Notes
 
 Recommended screenshots/GIFs for a personal website:
 
-- `Dashboard`: bankroll, ROI, recent paper bets, and bankroll chart.
+- `Dashboard`: bankroll, ROI, recent tracked bets, and bankroll chart.
 - `Value Finder`: ranked live odds board with EV and de-vig explanation.
 - `Backtest`: equity curve, calibration chart, Brier score, log loss,
   ROI, and drawdown.
@@ -201,8 +205,8 @@ Recommended screenshots/GIFs for a personal website:
 
 Interview talking points:
 
-- **Product framing:** paper trading and market analytics, not real-money
-  betting.
+- **Product framing:** market analytics plus simulated or manually
+  recorded bet tracking; the app does not place bets or move money.
 - **Backend design:** typed FastAPI routers, SQLAlchemy models, Alembic
   migrations, and an append-only bankroll ledger.
 - **Quant logic:** odds normalization, de-vigging, EV ranking, Kelly
@@ -311,7 +315,8 @@ pipeline trained on historical team data.
 
 ## Responsible use
 
-This is a personal project for learning and paper trading. Real sports
-betting has negative expected value against the house take; most
-bettors lose money over long horizons. Nothing here is financial
-advice. If gambling is a problem, call 1-800-GAMBLER.
+This is a personal project for learning, analytics, and responsible
+record keeping. Real sports betting has negative expected value against
+the house take; most bettors lose money over long horizons. Nothing
+here is financial advice, and the app does not place wagers or move
+funds. If gambling is a problem, call 1-800-GAMBLER.
