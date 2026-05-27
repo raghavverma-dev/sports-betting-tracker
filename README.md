@@ -1,10 +1,11 @@
 # BetEdge
 
-A sports-forecasting and market-simulation platform. Pulls live odds
-from US sportsbooks, computes de-vigged market probabilities, and runs
-a backtesting pipeline that scores strategies on both **forecast
-quality** (Brier score, log loss, calibration) and **portfolio
-outcomes** (ROI, max drawdown) using an extensible strategy interface.
+BetEdge is a full-stack paper-trading and sports-market analytics
+platform. It pulls live odds from US sportsbooks, computes de-vigged
+market probabilities, ranks potential bets by expected value, tracks a
+paper bankroll, and runs backtests that score strategies on both
+**forecast quality** (Brier score, log loss, calibration) and
+**portfolio outcomes** (ROI, max drawdown).
 
 The backend is Python 3.12 + FastAPI + Postgres + SQLAlchemy 2.0 with
 Alembic-managed migrations and a Click-based CLI for offline runs. The
@@ -13,6 +14,28 @@ backtests, live odds, manual bet tracking, and bankroll history.
 
 No real money moves. No user accounts. Everything is runnable locally
 with `docker compose up`.
+
+## Why This Exists
+
+Sportsbook odds are a compact, real-world probability market. BetEdge
+uses that domain to demonstrate product thinking, data modeling,
+frontend UX, backend API design, and quantitative engineering:
+
+- Convert American odds into implied probabilities.
+- Remove sportsbook vig to estimate fair market probability.
+- Compare market consensus to the best available line.
+- Track paper bets and bankroll movement through an auditable ledger.
+- Evaluate strategies with both statistical and portfolio metrics.
+
+## Tech Stack
+
+- **Frontend:** React 19, TypeScript, Vite, React Router, Recharts
+- **Backend:** Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2.0
+- **Data:** Postgres, Alembic migrations, synthetic NBA seed corpus,
+  optional real NBA/SBR ingestion
+- **Quant:** implied probability, de-vigging, expected value, Kelly
+  sizing, Brier score, log loss, calibration, ROI, max drawdown
+- **Tooling:** Docker Compose, pytest, Ruff, mypy, ESLint, TypeScript
 
 > **Note on data**: the historical corpus shipped with the seed script
 > is **synthetic** — generated from a calibrated latent-score model
@@ -166,6 +189,30 @@ Recruiter pitch:
 > ranks potential bets by expected value, and lets users track paper
 > bets, bankroll, ROI, and backtested strategy performance.
 
+## Portfolio Notes
+
+Recommended screenshots/GIFs for a personal website:
+
+- `Dashboard`: bankroll, ROI, recent paper bets, and bankroll chart.
+- `Value Finder`: ranked live odds board with EV and de-vig explanation.
+- `Backtest`: equity curve, calibration chart, Brier score, log loss,
+  ROI, and drawdown.
+- `API Docs`: FastAPI Swagger page at `http://localhost:8000/docs`.
+
+Interview talking points:
+
+- **Product framing:** paper trading and market analytics, not real-money
+  betting.
+- **Backend design:** typed FastAPI routers, SQLAlchemy models, Alembic
+  migrations, and an append-only bankroll ledger.
+- **Quant logic:** odds normalization, de-vigging, EV ranking, Kelly
+  sizing, and outlier/stale line handling.
+- **Testing/quality:** 57 backend tests plus Ruff, mypy, ESLint, and a
+  passing frontend production build.
+- **Tradeoffs:** synthetic data is reproducible for demos; real data
+  ingestion exists but would need a richer feature pipeline before any
+  model claims should be treated seriously.
+
 ## Backtest CLI
 
 Installed as the `betedge` console script inside the backend container.
@@ -237,6 +284,10 @@ npm run lint         # eslint
 
 Current state: 57 backend tests, zero ESLint issues, zero ruff issues,
 zero mypy issues, and a passing production frontend build.
+
+GitHub Actions workflow content is included at
+`docs/github-actions-ci.yml`. To enable CI, create
+`.github/workflows/ci.yml` in GitHub and paste that file's contents.
 
 ## Storage layout
 

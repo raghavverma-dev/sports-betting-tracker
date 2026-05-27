@@ -39,6 +39,11 @@ backend/*.db
 
 # Environment
 .env
+.env.*
+!.env.example
+
+# Local historical data downloads
+backend/data/
 
 # Local notes / unrelated research
 analyst_stock_projections_2026.md
