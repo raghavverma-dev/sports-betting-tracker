@@ -1,0 +1,50 @@
+# docker-compose for local development.
+# Run: make dev   (or: docker compose up --build)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: betedge-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: betedge
+      POSTGRES_PASSWORD: betedge
+      POSTGRES_DB: betedge
+    ports:
+      - "5432:5432"
+    volumes:
+      - betedge-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U betedge -d betedge"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: betedge-backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://betedge:betedge@postgres:5432/betedge
+      ODDS_API_KEY: ${ODDS_API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENVIRONMENT: development
+      CORS_ALLOW_ORIGINS: '["http://localhost:5173","http://localhost:4173"]'
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Bind-mount the source for hot reload in dev.
+      - ./backend/src:/app/src:cached
+      - ./backend/alembic:/app/alembic:cached
+      - ./backend/tests:/app/tests:cached
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn betedge.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/src"
+
+volumes:
+  betedge-pgdata:
