@@ -302,17 +302,12 @@ GitHub Actions workflow content is included at
   Finder uses the backend `ODDS_API_KEY` so the key does not need to be
   stored in the browser.
 
-## Roadmap
+## Future Work
 
-- [x] Backend: FastAPI + Postgres + Alembic (Step 1)
-- [x] Backtest engine with market-implied baseline + Brier / log loss /
-      calibration / ROI / max drawdown (Step 3, thin)
-- [ ] Real model: gradient-boosted win-probability model for NBA
-      moneylines trained on historical team features (Step 2)
-- [ ] Deploy to Fly.io behind a custom domain
-- [ ] Prometheus `/metrics` + Grafana dashboard
-- [ ] GitHub Actions: test + lint on PR, build + push on main
-- [ ] WebSocket push for live line movement
+The core demo is complete: live odds ranking, paper bet tracking,
+bankroll analytics, and backtesting all run locally. The next meaningful
+extensions would be deployment, CI, and a real NBA feature/modeling
+pipeline trained on historical team data.
 
 ## Responsible use
 
