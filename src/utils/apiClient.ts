@@ -5,6 +5,8 @@
  * don't repeat try/catch + response.ok checks everywhere.
  */
 
+import type { AppState, BankrollSnapshot, Bet, BetFormData, BetStatus } from '../types';
+
 const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:8000';
 
 export class ApiError extends Error {
@@ -204,4 +206,123 @@ export async function fetchRankedOddsForSport(
   const params = new URLSearchParams({ sport, market });
   const ranked = await api.get<BackendRankedBet[]>(`/odds/ranked?${params.toString()}`);
   return ranked.map(toRankedOddsBet);
+}
+
+// ============ Manual bet endpoints ============
+
+interface BackendBet {
+  id: number;
+  sport: Bet['sport'];
+  bet_type: Bet['betType'];
+  status: BetStatus;
+  event: string;
+  selection: string;
+  odds: number;
+  stake: number;
+  potential_payout: number;
+  actual_payout: number | null;
+  placed_at: string;
+  sportsbook: string;
+  notes: string;
+  estimated_probability: number | null;
+  implied_probability: number;
+  expected_value: number | null;
+  kelly_stake: number | null;
+}
+
+interface BackendBankrollEvent {
+  id: number;
+  occurred_at: string;
+  balance_after: number;
+}
+
+interface BackendBankrollSnapshot {
+  current_balance: number;
+  initial_balance: number;
+  history: BackendBankrollEvent[];
+}
+
+function toBet(bet: BackendBet): Bet {
+  return {
+    id: String(bet.id),
+    sport: bet.sport,
+    betType: bet.bet_type,
+    status: bet.status,
+    event: bet.event,
+    selection: bet.selection,
+    odds: bet.odds,
+    stake: bet.stake,
+    potentialPayout: bet.potential_payout,
+    actualPayout: bet.actual_payout,
+    date: bet.placed_at,
+    sportsbook: bet.sportsbook,
+    notes: bet.notes,
+    estimatedProbability: bet.estimated_probability,
+    impliedProbability: bet.implied_probability,
+    expectedValue: bet.expected_value,
+    kellyStake: bet.kelly_stake,
+  };
+}
+
+function toBetCreatePayload(form: BetFormData) {
+  return {
+    sport: form.sport,
+    bet_type: form.betType,
+    event: form.event,
+    selection: form.selection,
+    odds: form.odds,
+    stake: form.stake,
+    sportsbook: form.sportsbook,
+    notes: form.notes,
+    estimated_probability: form.estimatedProbability,
+  };
+}
+
+async function listTrackedBets(): Promise<Bet[]> {
+  const bets = await api.get<BackendBet[]>('/bets');
+  return bets.map(toBet);
+}
+
+async function getBankrollSnapshot(): Promise<{
+  bankroll: number;
+  initialBankroll: number;
+  bankrollHistory: BankrollSnapshot[];
+}> {
+  const snapshot = await api.get<BackendBankrollSnapshot>('/bets/bankroll/snapshot');
+  const bankrollHistory = snapshot.history.length > 0
+    ? snapshot.history.map(event => ({
+      date: event.occurred_at,
+      balance: event.balance_after,
+    }))
+    : [{ date: new Date().toISOString(), balance: snapshot.current_balance }];
+
+  return {
+    bankroll: snapshot.current_balance,
+    initialBankroll: snapshot.initial_balance,
+    bankrollHistory,
+  };
+}
+
+export async function loadTrackedBetState(): Promise<AppState> {
+  const [bets, bankroll] = await Promise.all([listTrackedBets(), getBankrollSnapshot()]);
+  return {
+    bets,
+    bankroll: bankroll.bankroll,
+    initialBankroll: bankroll.initialBankroll,
+    bankrollHistory: bankroll.bankrollHistory,
+  };
+}
+
+export async function createTrackedBet(form: BetFormData): Promise<Bet> {
+  const bet = await api.post<BackendBet>('/bets', toBetCreatePayload(form));
+  return toBet(bet);
+}
+
+export async function updateTrackedBetStatus(id: string, status: BetStatus): Promise<Bet> {
+  const bet = await api.patch<BackendBet>(`/bets/${encodeURIComponent(id)}/status`, { status });
+  return toBet(bet);
+}
+
+export async function deleteTrackedBet(id: string): Promise<void> {
+  await api.delete<void>(`/bets/${encodeURIComponent(id)}`);
 }

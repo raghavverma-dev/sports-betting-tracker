@@ -7,7 +7,8 @@ type Action =
   | { type: 'DELETE_BET'; payload: string }
   | { type: 'SET_BANKROLL'; payload: number }
   | { type: 'SET_INITIAL_BANKROLL'; payload: number }
-  | { type: 'LOAD_SAMPLE_DATA' };
+  | { type: 'LOAD_SAMPLE_DATA' }
+  | { type: 'HYDRATE_STATE'; payload: AppState };
 
 export type { Action };
 

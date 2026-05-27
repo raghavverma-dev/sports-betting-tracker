@@ -1,13 +1,22 @@
-import { useReducer, useEffect, type ReactNode } from 'react';
+import { useCallback, useReducer, useEffect, type ReactNode } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import type { AppState, Bet } from '../types';
 import { calculatePayout, impliedProbability, calculateEV, kellyStake } from '../utils/odds';
 import { loadState, saveState } from '../utils/storage';
+import {
+  createTrackedBet,
+  deleteTrackedBet,
+  loadTrackedBetState,
+  updateTrackedBetStatus,
+} from '../utils/apiClient';
 import { AppContext } from './appContextDef';
 import type { Action } from './appContextDef';
 
 function appReducer(state: AppState, action: Action): AppState {
   switch (action.type) {
+    case 'HYDRATE_STATE':
+      return action.payload;
+
     case 'ADD_BET': {
       const form = action.payload;
       const implied = impliedProbability(form.odds);
@@ -223,11 +232,48 @@ function generateSampleData(state: AppState): AppState {
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(appReducer, null, loadState);
+  const [state, dispatchLocal] = useReducer(appReducer, null, loadState);
+
+  const refreshFromBackend = useCallback(async () => {
+    const backendState = await loadTrackedBetState();
+    dispatchLocal({ type: 'HYDRATE_STATE', payload: backendState });
+  }, []);
 
   useEffect(() => {
     saveState(state);
   }, [state]);
+
+  useEffect(() => {
+    void refreshFromBackend().catch(() => {
+      // Keep the localStorage fallback usable when the backend is offline.
+    });
+  }, [refreshFromBackend]);
+
+  const dispatch = useCallback((action: Action) => {
+    switch (action.type) {
+      case 'ADD_BET':
+        void createTrackedBet(action.payload)
+          .then(refreshFromBackend)
+          .catch(() => dispatchLocal(action));
+        break;
+
+      case 'UPDATE_BET_STATUS':
+        void updateTrackedBetStatus(action.payload.id, action.payload.status)
+          .then(refreshFromBackend)
+          .catch(() => dispatchLocal(action));
+        break;
+
+      case 'DELETE_BET':
+        void deleteTrackedBet(action.payload)
+          .then(refreshFromBackend)
+          .catch(() => dispatchLocal(action));
+        break;
+
+      default:
+        dispatchLocal(action);
+        break;
+    }
+  }, [refreshFromBackend]);
 
   return (
     <AppContext.Provider value={{ state, dispatch }}>

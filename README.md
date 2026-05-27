@@ -9,7 +9,7 @@ outcomes** (ROI, max drawdown) using an extensible strategy interface.
 The backend is Python 3.12 + FastAPI + Postgres + SQLAlchemy 2.0 with
 Alembic-managed migrations and a Click-based CLI for offline runs. The
 frontend is React 19 + TypeScript + Vite, reading from the backend for
-backtests and keeping manual bet tracking in `localStorage`.
+backtests, live odds, manual bet tracking, and bankroll history.
 
 No real money moves. No user accounts. Everything is runnable locally
 with `docker compose up`.
@@ -55,9 +55,12 @@ with `docker compose up`.
   strategy, see equity curve, calibration scatter, and ROI / Brier / log
   loss / drawdown
 - `utils/apiClient.ts` — typed fetch wrapper for the backend
-- The existing `BetTracker` / `ValueFinder` / `AiBettor` / `Dashboard`
-  pages still work off `localStorage` so the app is usable even without
-  the backend running
+- `BetTracker`, `Dashboard`, and `Analytics` hydrate from the backend
+  `/bets` API and bankroll ledger, while keeping a browser fallback so
+  the UI remains usable if the backend is offline.
+- `ValueFinder` calls the backend live-odds proxy so The Odds API key
+  can stay in backend configuration instead of browser storage.
+- `AiBettor` remains a browser-side paper simulator for now.
 
 ## Quick start (full stack)
 
@@ -241,9 +244,8 @@ zero mypy issues, and a passing production frontend build.
 `bets`, `bankroll_events`, `historical_games`, `historical_odds`,
 `backtest_runs`, `backtest_bets`.
 
-**localStorage** (browser-only): keys used by pages that have not
-yet been migrated behind the backend.
-- `sports-betting-tracker` — manual bet journal
+**localStorage** (browser-only): fallback/cache keys.
+- `sports-betting-tracker` — cached manual bet state when the backend is unavailable
 - `auto-bettor-state` — AI simulator state
 - `odds-api-key` — The Odds API key for the AI simulator only. Value
   Finder uses the backend `ODDS_API_KEY` so the key does not need to be
