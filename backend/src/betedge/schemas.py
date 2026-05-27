@@ -107,6 +107,11 @@ class RankedBetOut(BaseModel):
     all_books: list[BookOdds]
     stale_warning: bool
     outlier_warning: bool
+    stale_minutes: int = 0
+    adjusted_ev: float | None = None
+    adjusted_best_odds: int | None = None
+    adjusted_best_book: str | None = None
+    adjusted_market_probability: float | None = None
 
 
 # ---------- Backtest ----------

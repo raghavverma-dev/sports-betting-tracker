@@ -4,15 +4,8 @@ import {
   formatProbability,
   impliedProbability as americanToImplied,
 } from '../utils/odds';
-import {
-  fetchOddsForSport,
-  rankBets,
-  getStoredApiKey,
-  checkApiQuota,
-  SUPPORTED_SPORTS,
-} from '../utils/oddsApi';
-import type { GameOdds, ApiQuota } from '../utils/oddsApi';
-import ApiKeySetup from '../components/ApiKeySetup';
+import { fetchRankedOddsForSport, type RankedOddsBet } from '../utils/apiClient';
+import { SUPPORTED_SPORTS } from '../utils/oddsApi';
 import { format, parseISO, startOfDay, endOfDay, addDays, addMonths } from 'date-fns';
 import { useApp } from '../context/useApp';
 import type { BetFormData, BetType, Sport } from '../types';
@@ -70,18 +63,15 @@ const ALL_MARKETS = ['h2h', 'spreads', 'totals'] as const;
 
 export default function ValueFinder() {
   const { state, dispatch } = useApp();
-  const [hasKey, setHasKey] = useState(!!getStoredApiKey());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [rawGames, setRawGames] = useState<GameOdds[]>([]);
-  const [rankedBets, setRankedBets] = useState<ReturnType<typeof rankBets>>([]);
+  const [rankedBets, setRankedBets] = useState<RankedOddsBet[]>([]);
   const [selectedSports, setSelectedSports] = useState<Set<string>>(new Set([SUPPORTED_SPORTS[0]]));
   const [marketFilter, setMarketFilter] = useState<MarketFilter>('h2h');
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('today');
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
-  const [quota, setQuota] = useState<ApiQuota | null>(null);
   const [showGuide, setShowGuide] = useState(() => {
     return localStorage.getItem('hide-betting-guide') !== 'true';
   });
@@ -96,38 +86,41 @@ export default function ValueFinder() {
     setError(null);
     try {
       const markets = marketFilter === 'all' ? [...ALL_MARKETS] : [marketFilter];
-
-      // Build all sport×market combos and fetch in parallel
-      const fetches = sports.flatMap(sport =>
-        markets.map(market => fetchOddsForSport(sport, market).catch(() => [] as GameOdds[]))
+      const requests = sports.flatMap(sport =>
+        markets.map(market => ({ sport, market }))
       );
-      const results = await Promise.all(fetches);
-      const games = results.flat();
 
-      setRawGames(games);
-      const ranked = rankBets(games);
+      const results = await Promise.allSettled(
+        requests.map(({ sport, market }) => fetchRankedOddsForSport(sport, market))
+      );
+      const ranked = results.flatMap(result =>
+        result.status === 'fulfilled' ? result.value : []
+      );
+      const failures = results.filter(result => result.status === 'rejected');
+
       setRankedBets(ranked);
       setLastFetched(new Date());
-      checkApiQuota().then(setQuota).catch(() => {});
+      if (failures.length > 0) {
+        const firstFailure = failures[0];
+        const message = firstFailure.status === 'rejected' && firstFailure.reason instanceof Error
+          ? firstFailure.reason.message
+          : 'Failed to fetch odds from the backend.';
+        setError(
+          ranked.length > 0
+            ? `${failures.length} market request${failures.length > 1 ? 's' : ''} failed: ${message}`
+            : message
+        );
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch odds');
+      setError(err instanceof Error ? err.message : 'Failed to fetch odds from the backend');
     } finally {
       setLoading(false);
     }
   }, [selectedSports, marketFilter]);
 
   useEffect(() => {
-    if (hasKey) {
-      fetchOdds();
-      checkApiQuota()
-        .then(setQuota)
-        .catch((err) => {
-          if (err instanceof Error && err.message.includes('Invalid API key')) {
-            setError('Invalid API key. Check your key at the-odds-api.com.');
-          }
-        });
-    }
-  }, [hasKey, fetchOdds]);
+    void fetchOdds();
+  }, [fetchOdds]);
 
   function toggleGuide() {
     const next = !showGuide;
@@ -149,7 +142,7 @@ export default function ValueFinder() {
   }
 
   function handleTrackBet(
-    bet: ReturnType<typeof rankBets>[number],
+    bet: RankedOddsBet,
     event: MouseEvent<HTMLButtonElement>,
   ) {
     event.stopPropagation();
@@ -198,18 +191,6 @@ export default function ValueFinder() {
 
   const requestCost = selectedSports.size * (marketFilter === 'all' ? 3 : 1);
 
-  if (!hasKey) {
-    return (
-      <div className="page">
-        <h1>Value Bet Finder</h1>
-        <p className="page-subtitle">
-          Pull real-time odds from sportsbooks across the internet, compare lines, and find the best value bets.
-        </p>
-        <ApiKeySetup onKeySet={() => setHasKey(true)} />
-      </div>
-    );
-  }
-
   const timeCutoff = getTimeCutoff(timeFilter);
   const filteredBets = rankedBets.filter(b => {
     if (marketFilter !== 'all' && b.betType !== marketFilter) return false;
@@ -220,8 +201,8 @@ export default function ValueFinder() {
     return true;
   });
 
-  const gameCount = new Set(rawGames.map(g => g.id)).size;
-  const bookCount = new Set(rawGames.flatMap(g => g.bookmakers.map(b => b.title))).size;
+  const gameCount = new Set(rankedBets.map(b => b.gameId)).size;
+  const bookCount = new Set(rankedBets.flatMap(b => b.allBookOdds.map(book => book.book))).size;
   const positiveEvCount = filteredBets.filter(b => (b.adjustedEv ?? b.ev) > 0).length;
   const activeMarketLabel = MARKET_LABELS[marketFilter];
 
@@ -246,9 +227,6 @@ export default function ValueFinder() {
             </button>
             <button className="btn btn-primary" onClick={fetchOdds} disabled={loading}>
               {loading ? 'Loading...' : 'Refresh Odds'}
-            </button>
-            <button className="btn btn-secondary" onClick={() => { localStorage.removeItem('odds-api-key'); setHasKey(false); }}>
-              Change API Key
             </button>
           </div>
         </div>
@@ -344,19 +322,6 @@ export default function ValueFinder() {
         </div>
       )}
 
-      {quota !== null && quota.remaining === 0 && (
-        <div className="error-banner">
-          API quota exhausted{quota.used >= 0 ? ` (${quota.used} requests used this month)` : ''}.
-          Your free tier resets monthly. Visit the-odds-api.com to check your plan.
-        </div>
-      )}
-
-      {quota !== null && quota.remaining > 0 && quota.remaining < 50 && (
-        <div className="warning-banner">
-          API quota running low: {quota.remaining} requests remaining ({quota.used} used this month).
-        </div>
-      )}
-
       <div className="card toolbar-card">
         <div className="filter-bar value-filter-bar">
           <div className="filter-controls">
@@ -396,13 +361,10 @@ export default function ValueFinder() {
             </div>
           </div>
           <div className="filter-meta">
-            <span className="table-hint">Click any row to expand | Refresh costs {requestCost} request{requestCost > 1 ? 's' : ''}</span>
+            <span className="table-hint">Click any row to expand | Refresh queries {requestCost} market{requestCost > 1 ? 's' : ''}</span>
             <span className="filter-count">
               {filteredBets.length} bets found
               {positiveEvCount > 0 && <span className="positive"> ({positiveEvCount} +EV)</span>}
-              {quota !== null && quota.remaining >= 0 && (
-                <span className="quota-hint"> | {quota.remaining} left</span>
-              )}
             </span>
           </div>
         </div>

@@ -141,8 +141,8 @@ This is the path to show in a 2-3 minute recruiting demo:
 1. **Dashboard** — start with `Load Sample Data` if the browser has no
    bets yet. The sample rows are synthetic paper bets, included so the
    bankroll, ROI, recent-bets table, and charts are visible immediately.
-2. **Value Finder** — add a free The Odds API key when prompted, then
-   fetch live sportsbook odds. The ranked board de-vigs each market,
+2. **Value Finder** — add a free The Odds API key to backend `.env`, then
+   fetch live sportsbook odds through the FastAPI proxy. The ranked board de-vigs each market,
    estimates the market's fair probability, compares that to the best
    available line, and sorts opportunities by expected value.
 3. **Track a live line** — click `Track` on a Value Finder row, enter a
@@ -241,12 +241,13 @@ zero mypy issues, and a passing production frontend build.
 `bets`, `bankroll_events`, `historical_games`, `historical_odds`,
 `backtest_runs`, `backtest_bets`.
 
-**localStorage** (browser-only): three keys used by pages that have not
+**localStorage** (browser-only): keys used by pages that have not
 yet been migrated behind the backend.
 - `sports-betting-tracker` — manual bet journal
 - `auto-bettor-state` — AI simulator state
-- `odds-api-key` — The Odds API key (only if the user supplies one in
-  the browser; on the backend it comes from `ODDS_API_KEY`)
+- `odds-api-key` — The Odds API key for the AI simulator only. Value
+  Finder uses the backend `ODDS_API_KEY` so the key does not need to be
+  stored in the browser.
 
 ## Roadmap
 

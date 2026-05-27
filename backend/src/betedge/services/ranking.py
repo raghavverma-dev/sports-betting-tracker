@@ -21,6 +21,16 @@ from betedge.services.odds_math import (
 STALE_THRESHOLD = timedelta(minutes=10)
 OUTLIER_PROB_GAP = 0.05
 MIN_BOOKS_FOR_OUTLIER = 3
+SPORT_LABELS = {
+    "basketball_nba": "NBA",
+    "americanfootball_nfl": "NFL",
+    "baseball_mlb": "MLB",
+    "icehockey_nhl": "NHL",
+    "americanfootball_ncaaf": "NCAAF",
+    "basketball_ncaab": "NCAAB",
+    "soccer_usa_mls": "MLS",
+    "mma_mixed_martial_arts": "UFC",
+}
 
 
 @dataclass(slots=True)
@@ -86,7 +96,8 @@ def rank_bets(games: list[dict[str, Any]]) -> list[RankedBet]:
     ranked_by_key: dict[str, RankedBet] = {}
 
     for game in games:
-        sport = game.get("sport_key", game.get("sport", "UNKNOWN"))
+        sport_key = str(game.get("sport_key", game.get("sport", "UNKNOWN")))
+        sport = SPORT_LABELS.get(sport_key, sport_key)
         event = f"{game.get('away_team', '?')} @ {game.get('home_team', '?')}"
         commence = _parse_ts(game.get("commence_time")) or datetime.now(UTC)
 

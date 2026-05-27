@@ -34,6 +34,11 @@ def _to_schema(rb: RankedBet) -> RankedBetOut:
         ],
         stale_warning=rb.stale_warning,
         outlier_warning=rb.outlier_warning,
+        stale_minutes=rb.stale_minutes,
+        adjusted_ev=rb.adjusted_ev,
+        adjusted_best_odds=rb.adjusted_best_odds,
+        adjusted_best_book=rb.adjusted_best_book,
+        adjusted_market_probability=rb.adjusted_market_probability,
     )
 
 
