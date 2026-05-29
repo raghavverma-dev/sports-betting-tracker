@@ -38,9 +38,15 @@ class Settings(BaseSettings):
     # CORS allow-list for the frontend dev server + any deployed UI.
     cors_allow_origins: list[str] = Field(
         default_factory=lambda: [
+            # Vite picks the next free port (5174, 5175, ...) when 5173 is
+            # taken, so allow a small range of dev-server fallbacks.
             "http://localhost:5173",
+            "http://localhost:5174",
+            "http://localhost:5175",
             "http://localhost:4173",
             "http://127.0.0.1:5173",
+            "http://127.0.0.1:5174",
+            "http://127.0.0.1:5175",
         ]
     )
 

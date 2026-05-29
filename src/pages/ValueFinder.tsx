@@ -4,7 +4,7 @@ import {
   formatProbability,
   impliedProbability as americanToImplied,
 } from '../utils/odds';
-import { fetchRankedOddsForSport, type RankedOddsBet } from '../utils/apiClient';
+import { ApiError, fetchRankedOddsForSport, type RankedOddsBet } from '../utils/apiClient';
 import { SUPPORTED_SPORTS } from '../utils/oddsApi';
 import { format, parseISO, startOfDay, endOfDay, addDays, addMonths } from 'date-fns';
 import { useApp } from '../context/useApp';
@@ -61,6 +61,27 @@ function InfoTip({ text }: { text: string }) {
 
 const ALL_MARKETS = ['h2h', 'spreads', 'totals'] as const;
 
+const API_KEY_SETUP_HINT =
+  'Add a free key from the-odds-api.com to ODDS_API_KEY in backend/.env, ' +
+  'then restart the backend (the frontend never sees the key).';
+
+// Turn a fetch failure into a message a user can act on. The backend already
+// sends a descriptive 503 when ODDS_API_KEY is unset; we append concrete
+// setup steps so the fix is obvious from the banner alone.
+function describeOddsError(reason: unknown): string {
+  if (reason instanceof ApiError) {
+    if (reason.status === 503 && /ODDS_API_KEY/i.test(reason.message)) {
+      return `${reason.message} ${API_KEY_SETUP_HINT}`;
+    }
+    if (reason.status === 502 && /api key/i.test(reason.message)) {
+      return `${reason.message} ${API_KEY_SETUP_HINT}`;
+    }
+    return reason.message;
+  }
+  if (reason instanceof Error) return reason.message;
+  return 'Failed to fetch odds from the backend.';
+}
+
 export default function ValueFinder() {
   const { state, dispatch } = useApp();
   const [loading, setLoading] = useState(false);
@@ -102,8 +123,8 @@ export default function ValueFinder() {
       setLastFetched(new Date());
       if (failures.length > 0) {
         const firstFailure = failures[0];
-        const message = firstFailure.status === 'rejected' && firstFailure.reason instanceof Error
-          ? firstFailure.reason.message
+        const message = firstFailure.status === 'rejected'
+          ? describeOddsError(firstFailure.reason)
           : 'Failed to fetch odds from the backend.';
         setError(
           ranked.length > 0
@@ -112,7 +133,7 @@ export default function ValueFinder() {
         );
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch odds from the backend');
+      setError(describeOddsError(err));
     } finally {
       setLoading(false);
     }

@@ -20,13 +20,25 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch {
+    // fetch() rejects with a bare TypeError ("Failed to fetch") when the
+    // backend can't be reached at all — not running, wrong URL, or CORS.
+    // Translate it into something the user can act on.
+    throw new ApiError(
+      0,
+      `Cannot reach the backend at ${API_URL}. Is it running? Start it with ` +
+        `\`make dev\` (or \`make dev-native\`), then retry.`,
+    );
+  }
   if (!res.ok) {
     let detail = `${res.status} ${res.statusText}`;
     try {
