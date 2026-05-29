@@ -2,10 +2,64 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from betedge.backtest.engine import EngineConfig, run_backtest
+from betedge.backtest.engine import (
+    _LOSS,
+    _PUSH,
+    _WIN,
+    EngineConfig,
+    _Quote,
+    _settle,
+    run_backtest,
+)
 from betedge.backtest.seed import SeedConfig, seed_historical_games
 from betedge.backtest.strategies import build_strategy
 from betedge.models import HistoricalGame
+
+
+def _game(home_score: int, away_score: int) -> HistoricalGame:
+    return HistoricalGame(
+        external_id="settle-test",
+        sport="NBA",
+        season="test",
+        home_team="HOME",
+        away_team="AWAY",
+        home_score=home_score,
+        away_score=away_score,
+        winner="home" if home_score > away_score else "away",
+    )
+
+
+def _quote(selection: str, point: float | None) -> _Quote:
+    return _Quote(selection=selection, american_odds=-110, book="consensus", point=point)
+
+
+def test_settle_moneyline_grades_on_winner() -> None:
+    game = _game(home_score=110, away_score=100)
+    # Moneyline has no line (point is None): the side wins iff its team won.
+    assert _settle(_quote("HOME", None), game) == _WIN
+    assert _settle(_quote("AWAY", None), game) == _LOSS
+
+
+def test_settle_spread_home_favorite_covers() -> None:
+    # Home favored by 4.5 (signed -4.5) and wins by 10 -> margin + line = 5.5 > 0.
+    game = _game(home_score=110, away_score=100)
+    assert _settle(_quote("HOME", -4.5), game) == _WIN
+    # The away side carries the mirror line (+4.5); losing by 10 -> -5.5 < 0.
+    assert _settle(_quote("AWAY", 4.5), game) == _LOSS
+
+
+def test_settle_spread_away_dog_covers_within_the_number() -> None:
+    # Home favored by 12.5 but only wins by 10: home fails to cover, dog covers.
+    game = _game(home_score=110, away_score=100)
+    assert _settle(_quote("HOME", -12.5), game) == _LOSS
+    assert _settle(_quote("AWAY", 12.5), game) == _WIN
+
+
+def test_settle_spread_exact_line_is_a_push() -> None:
+    # Home favored by exactly 10 and wins by exactly 10: margin + line == 0.
+    game = _game(home_score=110, away_score=100)
+    assert _settle(_quote("HOME", -10.0), game) == _PUSH
+    assert _settle(_quote("AWAY", 10.0), game) == _PUSH
 
 
 def test_seed_then_backtest_market_baseline_reports_forecast_metrics(session: Session) -> None:

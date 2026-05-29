@@ -59,6 +59,12 @@ _REQUIRED_COLUMNS = frozenset(
     }
 )
 
+# Spread/total columns are optional: a row missing them still yields a valid
+# h2h game. Standard point-spread and total vig is -110 a side; this dataset
+# carries the line but not the price, so we attach the conventional -110.
+_SPREAD_PRICE = -110
+_TOTAL_PRICE = -110
+
 
 def season_end_year_to_label(end_year: int) -> str:
     """``2024`` -> ``2023-24`` (the season-string this dataset's year means)."""
@@ -83,6 +89,18 @@ def _parse_int(value: str | None) -> int | None:
         return None
     try:
         return int(float(s))
+    except ValueError:
+        return None
+
+
+def _parse_float(value: str | None) -> float | None:
+    if value is None:
+        return None
+    s = str(value).replace("+", "").strip()
+    if not s:
+        return None
+    try:
+        return float(s)
     except ValueError:
         return None
 
@@ -112,6 +130,12 @@ class _Row:
     away_score: int
     home_ml: int
     away_ml: int
+    # Signed point spread from the home team's perspective: negative when
+    # home is favored (e.g. -4.5), positive when home is the underdog.
+    # None when the source row has no usable spread.
+    home_spread: float | None
+    # Game total (over/under line). None when absent.
+    total: float | None
 
 
 def _read_rows(
@@ -157,9 +181,25 @@ def _read_rows(
                     away_score=away_score,  # type: ignore[arg-type]
                     home_ml=home_ml,  # type: ignore[arg-type]
                     away_ml=away_ml,  # type: ignore[arg-type]
+                    home_spread=_home_spread(raw),
+                    total=_parse_float(raw.get("total")),
                 )
             )
     return out
+
+
+def _home_spread(raw: dict[str, str | None]) -> float | None:
+    """Signed home-team spread from the ``whos_favored`` + ``spread`` pair.
+
+    The dataset stores ``spread`` as the favorite's line magnitude (always
+    positive) and names the favorite in ``whos_favored``. We convert to a
+    home-relative signed line: home favored -> negative, home dog -> positive.
+    """
+    mag = _parse_float(raw.get("spread"))
+    favored = (raw.get("whos_favored") or "").strip().lower()
+    if mag is None or favored not in ("home", "away"):
+        return None
+    return -mag if favored == "home" else mag
 
 
 def ingest_kaggle_csv(
@@ -230,8 +270,21 @@ def ingest_kaggle_csv(
         else:
             games_skipped += 1
 
-        for outcome, ml in ((row.home_team, row.home_ml), (row.away_team, row.away_ml)):
-            key = (game.id, book, market, outcome)
+        # (market, outcome, american_odds, point) for every quote on this game.
+        quotes: list[tuple[str, str, int, float | None]] = [
+            (market, row.home_team, row.home_ml, None),
+            (market, row.away_team, row.away_ml, None),
+        ]
+        if row.home_spread is not None:
+            # Each side's signed line: home covers if its margin beats its line.
+            quotes.append(("spreads", row.home_team, _SPREAD_PRICE, row.home_spread))
+            quotes.append(("spreads", row.away_team, _SPREAD_PRICE, -row.home_spread))
+        if row.total is not None:
+            quotes.append(("totals", "Over", _TOTAL_PRICE, row.total))
+            quotes.append(("totals", "Under", _TOTAL_PRICE, row.total))
+
+        for q_market, outcome, price, point in quotes:
+            key = (game.id, book, q_market, outcome)
             if key in existing_odds_keys:
                 odds_skipped += 1
                 continue
@@ -239,9 +292,10 @@ def ingest_kaggle_csv(
                 HistoricalOdds(
                     game_id=game.id,
                     book=book,
-                    market=market,
+                    market=q_market,
                     outcome=outcome,
-                    american_odds=ml,
+                    american_odds=price,
+                    point=point,
                 )
             )
             existing_odds_keys.add(key)

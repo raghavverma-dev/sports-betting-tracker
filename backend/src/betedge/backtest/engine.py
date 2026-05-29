@@ -77,6 +77,20 @@ class MarketProbabilitySource:
 
 
 @dataclass(frozen=True, slots=True)
+class _Quote:
+    """One settled-against book quote for a side of a game.
+
+    ``point`` is the signed spread line for that selection (negative when
+    the side is favored), or None for moneyline (h2h) markets.
+    """
+
+    selection: str
+    american_odds: int
+    book: str
+    point: float | None
+
+
+@dataclass(frozen=True, slots=True)
 class EngineConfig:
     strategy: Strategy
     sport: str
@@ -121,23 +135,24 @@ def _best_quotes_per_side(
     odds_rows: list[HistoricalOdds],
     game: HistoricalGame,
     market: str,
-) -> tuple[tuple[str, int, str] | None, tuple[str, int, str] | None]:
-    """Return (home_best, away_best) where each is (selection, odds, book)
-    or None if no quote for that side exists in `market`.
+) -> tuple[_Quote | None, _Quote | None]:
+    """Return (home_best, away_best) quotes, or None for a side with no
+    quote in `market`.
 
     "Best" = highest (most-favorable-to-bettor) American odds. Per the
     earlier ranking.py analysis, arithmetic max is the correct ordering
-    for American odds.
+    for American odds. For spreads, every row carries its signed ``point``
+    (the line from that side's perspective) so settlement can judge a cover.
     """
     market_rows = [r for r in odds_rows if r.market == market]
     home_rows = [r for r in market_rows if r.outcome == game.home_team]
     away_rows = [r for r in market_rows if r.outcome == game.away_team]
 
-    def _best(rows: list[HistoricalOdds]) -> tuple[str, int, str] | None:
+    def _best(rows: list[HistoricalOdds]) -> _Quote | None:
         if not rows:
             return None
         top = max(rows, key=lambda r: r.american_odds)
-        return (top.outcome, top.american_odds, top.book)
+        return _Quote(top.outcome, top.american_odds, top.book, top.point)
 
     return _best(home_rows), _best(away_rows)
 
@@ -205,35 +220,44 @@ def run_backtest(
     outcomes: list[float] = []
     placed = 0
 
+    is_h2h = config.market == "h2h"
+
     for game in games:
         home_best, away_best = _best_quotes_per_side(game.odds, game, config.market)
         if not (home_best and away_best):
-            continue  # Skip games without a full h2h market in the corpus.
+            continue  # Skip games without a full market in the corpus.
 
-        # Both sides get scored into the forecast-quality metrics: the
-        # market consensus is the "prediction" and the realized outcome
-        # is 1 for the winning side, 0 for the loser. Draws contribute 0
-        # to both (rare in h2h outside MLS).
         market_home_prob = _devigged_market_probability(
             game.odds, game, config.market, target=game.home_team
         )
         if market_home_prob is None:
             continue
-        market_away_prob = 1.0 - market_home_prob  # h2h complement after de-vig
+        market_away_prob = 1.0 - market_home_prob  # complement after de-vig
 
-        # The prediction (what the strategy bets on and what the forecast
-        # metrics score) comes from the configured source. The market
-        # source echoes the de-vig; a model source overrides it.
-        pred_home = config.probability_source.home_win_probability(game, market_home_prob)
-        if pred_home is None:
-            continue
-        pred_home = min(max(pred_home, 0.0), 1.0)
+        # The prediction (what the strategy bets on) comes from the configured
+        # source. For h2h the source's P(home win) is directly the home
+        # selection's win probability; for spreads/totals the model has no
+        # cover forecast, so we fall back to the de-vigged market price (the
+        # backtest then measures the betting mechanics and cover rate, not a
+        # model edge that doesn't exist for these markets yet).
+        if is_h2h:
+            pred_home = config.probability_source.home_win_probability(game, market_home_prob)
+            if pred_home is None:
+                continue
+            pred_home = min(max(pred_home, 0.0), 1.0)
+        else:
+            pred_home = market_home_prob
         pred_away = 1.0 - pred_home
 
-        home_win = 1.0 if game.winner == "home" else 0.0
-        away_win = 1.0 if game.winner == "away" else 0.0
-        predictions.extend([pred_home, pred_away])
-        outcomes.extend([home_win, away_win])
+        # Forecast-quality metrics are only meaningful for h2h, where the
+        # prediction is P(team wins) and the outcome is the realized win.
+        # Spread/total cover probabilities aren't comparable, so we don't
+        # pollute Brier/log loss with them.
+        if is_h2h:
+            home_win = 1.0 if game.winner == "home" else 0.0
+            away_win = 1.0 if game.winner == "away" else 0.0
+            predictions.extend([pred_home, pred_away])
+            outcomes.extend([home_win, away_win])
 
         decision, realized = _evaluate_strategy(
             config.strategy,
@@ -324,8 +348,8 @@ class _Realized:
 def _evaluate_strategy(
     strategy: Strategy,
     game: HistoricalGame,
-    home_best: tuple[str, int, str],
-    away_best: tuple[str, int, str],
+    home_best: _Quote,
+    away_best: _Quote,
     pred_home: float,
     pred_away: float,
     market_home: float,
@@ -339,15 +363,15 @@ def _evaluate_strategy(
     the bet-placement logic simple and mirrors how the live AiBettor
     already behaves via the `usedGameIds` block.
     """
-    for (selection, american_odds, book), predicted, market in (
+    for quote_q, predicted, market in (
         (home_best, pred_home, market_home),
         (away_best, pred_away, market_away),
     ):
         quote = GameQuote(
             game_id=game.id,
-            selection=selection,
-            american_odds=american_odds,
-            book=book,
+            selection=quote_q.selection,
+            american_odds=quote_q.american_odds,
+            book=quote_q.book,
             market_probability=market,
             predicted_probability=predicted,
         )
@@ -355,19 +379,43 @@ def _evaluate_strategy(
         if decision is None:
             continue
 
-        won = _bet_won(selection, game)
-        realized = _Realized(
-            payout=decision.potential_payout if won else 0.0,
-            outcome_value=1.0 if won else 0.0,
-        )
+        result = _settle(quote_q, game)
+        if result == _PUSH:
+            # Stake refunded: net zero. Record as a 0.5 outcome (neither win
+            # nor loss) so accuracy stats don't count a push either way.
+            realized = _Realized(payout=decision.stake, outcome_value=0.5)
+        else:
+            won = result == _WIN
+            realized = _Realized(
+                payout=decision.potential_payout if won else 0.0,
+                outcome_value=1.0 if won else 0.0,
+            )
         return decision, realized
 
     return None, _Realized(payout=0.0, outcome_value=0.0)
 
 
-def _bet_won(selection: str, game: HistoricalGame) -> bool:
-    if game.winner == "home":
-        return selection == game.home_team
-    if game.winner == "away":
-        return selection == game.away_team
-    return False  # Draws lose any h2h side in this simplified model.
+_WIN, _LOSS, _PUSH = 1, 0, -1
+
+
+def _settle(quote: _Quote, game: HistoricalGame) -> int:
+    """Grade a bet on ``quote.selection``: _WIN / _LOSS / _PUSH.
+
+    Moneyline (``point is None``): the side wins iff its team won.
+    Spread (signed ``point``): the side covers iff its scoring margin plus
+    its line is positive; exactly zero is a push (stake refunded).
+    """
+    is_home = quote.selection == game.home_team
+    margin = (game.home_score - game.away_score) if is_home else (
+        game.away_score - game.home_score
+    )
+
+    if quote.point is None:  # moneyline
+        return _WIN if margin > 0 else _LOSS
+
+    ats = margin + quote.point
+    if ats > 0:
+        return _WIN
+    if ats < 0:
+        return _LOSS
+    return _PUSH
