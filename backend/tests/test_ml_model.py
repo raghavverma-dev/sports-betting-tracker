@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from betedge.backtest.engine import EngineConfig, run_backtest
@@ -216,3 +217,62 @@ def test_predictions_use_training_scope_not_requested_season(
     both_served = [(a, b) for a, b in served if a is not None and b is not None]
     assert both_served  # some games are held out and scored by both
     assert all(a == b for a, b in both_served)
+
+
+def test_api_backtest_model_source(
+    client: TestClient,
+    session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The /backtest/runs endpoint scores held-out games with the model when
+    probability_source='model', and reports it on the run detail."""
+    from betedge.ml import model as model_module
+    from betedge.ml.model import train_model
+
+    _seed_learnable_corpus(session, n=300)
+    model_path = tmp_path / "m.joblib"
+    train_model(session, season="2023-24-real", model_path=model_path)
+    # The API builds ModelProbabilitySource at the default path; point it here.
+    monkeypatch.setattr(model_module, "DEFAULT_MODEL_PATH", model_path)
+
+    res = client.post(
+        "/backtest/runs",
+        json={
+            "strategy": "market-baseline",
+            "sport": "NBA",
+            "season": "2023-24-real",
+            "probability_source": "model",
+        },
+    )
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["probability_source"] == "model"
+    assert body["brier_score"] is not None
+    # Only held-out games are scored, so fewer than the full seeded corpus.
+    assert 0 < body["games_evaluated"] <= 300
+
+
+def test_api_backtest_model_missing_artifact_is_400(
+    client: TestClient,
+    session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model run with no trained artifact returns a clean 400, not a 500."""
+    from betedge.ml import model as model_module
+
+    _seed_learnable_corpus(session, n=60)
+    monkeypatch.setattr(model_module, "DEFAULT_MODEL_PATH", tmp_path / "absent.joblib")
+
+    res = client.post(
+        "/backtest/runs",
+        json={
+            "strategy": "market-baseline",
+            "sport": "NBA",
+            "season": "2023-24-real",
+            "probability_source": "model",
+        },
+    )
+    assert res.status_code == 400, res.text
+    assert "No trained model" in res.json()["detail"]

@@ -90,7 +90,8 @@ frontend UX, backend API design, and quantitative engineering:
 **Frontend (`src/`)**
 - `pages/Backtest.tsx` — new page that drives the backend: run a
   strategy, see equity curve, calibration scatter, and ROI / Brier / log
-  loss / drawdown
+  loss / drawdown, and compare the LightGBM model against the de-vigged
+  market on the same held-out games
 - `utils/apiClient.ts` — typed fetch wrapper for the backend
 - `BetTracker`, `Dashboard`, and `Analytics` hydrate from the backend
   `/bets` API and bankroll ledger, while keeping a browser fallback so
@@ -365,6 +366,11 @@ betedge backtest run --probability-source market --season 2021-22-real
 betedge backtest run --strategy kelly-ev-threshold \
     --probability-source model --season 2021-22-real --min-ev 2
 ```
+
+The same comparison is one click in the UI: the **Backtest** page has a
+**Compare Model vs Market** button that runs both forecasters on the same
+held-out season and renders them side by side, with the lower-Brier
+forecaster highlighted as the winner.
 
 Design notes that matter:
 

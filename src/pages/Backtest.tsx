@@ -6,9 +6,11 @@ import {
 } from 'recharts';
 import {
   ApiError,
+  compareBacktest,
   createBacktestRun,
   getBacktestRun,
   listBacktestRuns,
+  type BacktestComparison,
   type BacktestRequest,
   type BacktestRunDetail,
   type BacktestRunSummary,
@@ -23,6 +25,19 @@ const STRATEGY_LABELS: Record<StrategyName, string> = {
   'kelly-ev-threshold': 'Kelly Sized — fractional Kelly at EV threshold',
 };
 
+// Real ingested NBA seasons the model can be scored on (held-out games only).
+// The model trains on the full corpus, so any season exposes some held-out
+// games; 2021-22 is the README's reference comparison.
+const MODEL_SEASONS = [
+  '2017-18-real', '2018-19-real', '2019-20-real', '2020-21-real',
+  '2021-22-real', '2022-23-real', '2023-24-real',
+];
+const DEFAULT_SEASON = '2021-22-real';
+
+function seasonLabel(season: string): string {
+  return season.replace('-real', '');
+}
+
 export default function Backtest() {
   const [runs, setRuns] = useState<BacktestRunSummary[]>([]);
   const [selected, setSelected] = useState<BacktestRunDetail | null>(null);
@@ -30,6 +45,9 @@ export default function Backtest() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [backendDown, setBackendDown] = useState(false);
+  const [comparison, setComparison] = useState<BacktestComparison | null>(null);
+  const [comparing, setComparing] = useState(false);
+  const [season, setSeason] = useState<string>(DEFAULT_SEASON);
 
   const [req, setReq] = useState<BacktestRequest>({
     strategy: 'market-baseline',
@@ -90,6 +108,29 @@ export default function Backtest() {
     }
   }
 
+  async function runComparison() {
+    setComparing(true);
+    setError(null);
+    setComparison(null);
+    try {
+      const result = await compareBacktest({ ...req, season });
+      setComparison(result);
+      setSelected(result.model);
+      setRuns(await listBacktestRuns());
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setError(`Backend error (${err.status}): ${err.message}`);
+      } else if (err instanceof TypeError) {
+        setBackendDown(true);
+        setError('Cannot reach the backend. Is `make dev` running?');
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to run comparison');
+      }
+    } finally {
+      setComparing(false);
+    }
+  }
+
   if (backendDown) {
     return (
       <div className="page">
@@ -129,6 +170,8 @@ export default function Backtest() {
 
       {error && <div className="error-banner">{error}</div>}
 
+      {comparison && <ComparisonCard comparison={comparison} season={season} />}
+
       <div className="ai-two-col">
         <div className="card">
           <h2>Run a new backtest</h2>
@@ -161,6 +204,18 @@ export default function Backtest() {
               value={req.initial_bankroll}
               onChange={e => setReq({ ...req, initial_bankroll: Number(e.target.value) || 1000 })}
             />
+          </div>
+          <div className="config-row">
+            <label className="config-label">Season (for model compare)</label>
+            <select
+              className="config-input"
+              value={season}
+              onChange={e => setSeason(e.target.value)}
+            >
+              {MODEL_SEASONS.map(s => (
+                <option key={s} value={s}>{seasonLabel(s)}</option>
+              ))}
+            </select>
           </div>
           {req.strategy !== 'market-baseline' && (
             <>
@@ -200,12 +255,26 @@ export default function Backtest() {
             </>
           )}
           <div className="config-actions">
-            <button className="btn btn-primary" onClick={run} disabled={running}>
+            <button className="btn btn-primary" onClick={run} disabled={running || comparing}>
               {running ? 'Running…' : 'Run backtest'}
             </button>
             <button className="btn btn-secondary" onClick={refresh} disabled={loading}>
               {loading ? 'Loading…' : 'Refresh'}
             </button>
+          </div>
+          <div className="config-compare">
+            <button
+              className="btn btn-accent"
+              onClick={runComparison}
+              disabled={comparing || running}
+            >
+              {comparing ? 'Comparing…' : `Compare Model vs Market (${seasonLabel(season)})`}
+            </button>
+            <p className="table-hint">
+              Runs the LightGBM model and the de-vigged market on the same
+              held-out {seasonLabel(season)} games, then scores both. The model
+              only predicts games it never trained on.
+            </p>
           </div>
         </div>
 
@@ -313,7 +382,7 @@ export default function Backtest() {
         </div>
       )}
 
-      <div className="card table-card">
+      <div className="card table-card" style={{ marginTop: '1.5rem' }}>
         <h2>Past runs</h2>
         {runs.length === 0 ? (
           <p className="empty-text">No runs yet. Kick one off with the form above.</p>
@@ -347,6 +416,92 @@ export default function Backtest() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function ComparisonCard({
+  comparison,
+  season,
+}: {
+  comparison: BacktestComparison;
+  season: string;
+}) {
+  const { market, model } = comparison;
+  const marketBrier = market.brier_score;
+  const modelBrier = model.brier_score;
+
+  // Lower Brier is the better forecaster. Guard against nulls (a season with
+  // no h2h coverage would yield null metrics).
+  const haveBoth = marketBrier != null && modelBrier != null;
+  const modelWins = haveBoth && modelBrier < marketBrier;
+  const gap = haveBoth ? Math.abs(modelBrier - marketBrier) : null;
+
+  const fmt = (v: number | null | undefined) => (v == null ? '—' : v.toFixed(4));
+
+  return (
+    <div className="card comparison-card">
+      <div className="comparison-header">
+        <h2>Model vs Market — {seasonLabel(season)} (held out)</h2>
+        <span className="page-subtitle">
+          Same {model.games_evaluated} games, two forecasters. Lower Brier wins.
+        </span>
+      </div>
+
+      <div className="comparison-grid">
+        <div className={`comparison-col ${!modelWins && haveBoth ? 'winner' : ''}`}>
+          <span className="comparison-source">Market (de-vigged)</span>
+          <div className="comparison-metric">
+            <span className="summary-label">Brier</span>
+            <strong className="comparison-big mono">{fmt(marketBrier)}</strong>
+          </div>
+          <div className="comparison-sub">
+            <span>Log loss</span><span className="mono">{fmt(market.log_loss)}</span>
+          </div>
+          <div className="comparison-sub">
+            <span>ROI</span>
+            <span className={`mono ${(market.roi ?? 0) >= 0 ? 'positive' : 'negative'}`}>
+              {(market.roi ?? 0).toFixed(2)}%
+            </span>
+          </div>
+        </div>
+
+        <div className={`comparison-col ${modelWins ? 'winner' : ''}`}>
+          <span className="comparison-source">LightGBM model</span>
+          <div className="comparison-metric">
+            <span className="summary-label">Brier</span>
+            <strong className="comparison-big mono">{fmt(modelBrier)}</strong>
+          </div>
+          <div className="comparison-sub">
+            <span>Log loss</span><span className="mono">{fmt(model.log_loss)}</span>
+          </div>
+          <div className="comparison-sub">
+            <span>ROI</span>
+            <span className={`mono ${(model.roi ?? 0) >= 0 ? 'positive' : 'negative'}`}>
+              {(model.roi ?? 0).toFixed(2)}%
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <p className="comparison-verdict">
+        {!haveBoth ? (
+          <>This season lacks the moneyline coverage needed to score both forecasters.</>
+        ) : modelWins ? (
+          <>
+            The model edges the market by {gap!.toFixed(4)} Brier here — a rare
+            win. NBA closing lines are extremely sharp, so treat this as a
+            close call, not a durable edge.
+          </>
+        ) : (
+          <>
+            The market wins by {gap!.toFixed(4)} Brier — as expected. NBA closing
+            lines are very sharp, and a model with no player, injury, or lineup
+            data should not beat them. The value here is the honest,
+            leakage-safe pipeline that proves the comparison.
+          </>
+        )}
+      </p>
     </div>
   );
 }

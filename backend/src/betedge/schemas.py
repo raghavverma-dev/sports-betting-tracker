@@ -119,10 +119,18 @@ class RankedBetOut(BaseModel):
 StrategyName = Literal["market-baseline", "flat-ev-threshold", "kelly-ev-threshold"]
 
 
+ProbabilitySourceName = Literal["market", "model"]
+
+
 class BacktestRequest(BaseModel):
     strategy: StrategyName = "market-baseline"
     sport: Sport = "NBA"
     market: Literal["h2h"] = "h2h"
+    # The forecast the strategy bets on: the de-vigged market price, or the
+    # trained LightGBM model's P(home win). The model only serves held-out
+    # games, so a model run needs a real season it was NOT trained on.
+    probability_source: ProbabilitySourceName = "market"
+    season: str | None = None
     start_date: datetime | None = None
     end_date: datetime | None = None
     initial_bankroll: float = Field(default=1000.0, gt=0)
@@ -163,3 +171,6 @@ class BacktestRunOut(BaseModel):
 class BacktestRunDetail(BacktestRunOut):
     calibration: list[CalibrationBin] | None = None
     equity_curve: list[tuple[datetime, float]] | None = None
+    # Which forecast drove this run. Not a DB column — echoed from the
+    # request so the UI can label a model run distinctly from a market one.
+    probability_source: ProbabilitySourceName = "market"

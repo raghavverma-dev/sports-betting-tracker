@@ -94,12 +94,17 @@ export interface CalibrationBin {
 export interface BacktestRunDetail extends BacktestRunSummary {
   calibration: CalibrationBin[] | null;
   equity_curve: [string, number][] | null;
+  probability_source?: ProbabilitySource;
 }
+
+export type ProbabilitySource = 'market' | 'model';
 
 export interface BacktestRequest {
   strategy: 'market-baseline' | 'flat-ev-threshold' | 'kelly-ev-threshold';
   sport?: string;
   market?: 'h2h';
+  probability_source?: ProbabilitySource;
+  season?: string | null;
   initial_bankroll?: number;
   min_ev?: number;
   kelly_fraction?: number;
@@ -116,6 +121,26 @@ export async function createBacktestRun(req: BacktestRequest): Promise<BacktestR
 
 export async function getBacktestRun(id: number): Promise<BacktestRunDetail> {
   return api.get(`/backtest/runs/${id}`);
+}
+
+export interface BacktestComparison {
+  market: BacktestRunDetail;
+  model: BacktestRunDetail;
+}
+
+/**
+ * Run the same backtest config twice — once scored by the de-vigged market,
+ * once by the trained model — so the UI can show them side by side on
+ * identical held-out games. Runs sequentially: the model source loads a
+ * joblib artifact and scores the whole corpus, so firing both at once just
+ * doubles peak memory for no latency win.
+ */
+export async function compareBacktest(
+  req: BacktestRequest,
+): Promise<BacktestComparison> {
+  const market = await createBacktestRun({ ...req, probability_source: 'market' });
+  const model = await createBacktestRun({ ...req, probability_source: 'model' });
+  return { market, model };
 }
 
 export async function health(): Promise<{ status: string; version: string }> {

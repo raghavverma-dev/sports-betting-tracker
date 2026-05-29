@@ -112,7 +112,7 @@ def train_model(
     season: str | None = None,
     test_fraction: float = 0.2,
     window: int = 10,
-    model_path: Path = DEFAULT_MODEL_PATH,
+    model_path: Path | None = None,
     num_boost_round: int = 200,
     calibration_folds: int = 5,
 ) -> TrainResult:
@@ -138,6 +138,8 @@ def train_model(
     lgb, pd, joblib = _require_ml_deps()
     from sklearn.calibration import CalibratedClassifierCV
 
+    if model_path is None:
+        model_path = DEFAULT_MODEL_PATH
     games = _load_games(session, sport=sport, season=season)
     rows = build_feature_rows(games, window=window)
     if len(rows) < _MIN_TRAIN_ROWS:
@@ -296,9 +298,11 @@ class ModelProbabilitySource:
         *,
         sport: str = "NBA",
         season: str | None = None,
-        model_path: Path = DEFAULT_MODEL_PATH,
+        model_path: Path | None = None,
     ) -> None:
         _lgb, pd, joblib = _require_ml_deps()
+        if model_path is None:
+            model_path = DEFAULT_MODEL_PATH
         if not model_path.exists():
             raise FileNotFoundError(
                 f"No trained model at {model_path}. Run `betedge ml train` first."

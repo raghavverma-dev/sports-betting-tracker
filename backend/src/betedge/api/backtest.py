@@ -43,13 +43,16 @@ def create_run(
         kelly_fraction=req.kelly_fraction,
         max_stake_percent=req.max_stake_percent,
     )
+    probability_source = _build_probability_source(req, session)
     config = EngineConfig(
         strategy=strategy,
         sport=req.sport,
         market=req.market,
+        season=req.season,
         start_date=req.start_date,
         end_date=req.end_date,
         initial_bankroll=req.initial_bankroll,
+        probability_source=probability_source,
     )
     result = run_backtest(session, config)
     if result.run_id is None:
@@ -57,7 +60,25 @@ def create_run(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "Backtest ran but was not persisted — check server logs.",
         )
-    return _run_to_detail(session, result.run_id)
+    return _run_to_detail(session, result.run_id, probability_source=req.probability_source)
+
+
+def _build_probability_source(req: BacktestRequest, session: Session):  # type: ignore[no-untyped-def]
+    """Construct the forecast source. The model source is optional (needs the
+    'ml' extras + a trained artifact + a matching sport); surface its failure
+    modes as a 400 the UI can show, not a 500."""
+    if req.probability_source != "model":
+        from betedge.backtest.engine import MarketProbabilitySource
+
+        return MarketProbabilitySource()
+    try:
+        from betedge.ml.model import ModelProbabilitySource
+
+        return ModelProbabilitySource(session, sport=req.sport, season=req.season)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except RuntimeError as exc:  # ml extras not installed
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
 
 @router.get("/runs/{run_id}", response_model=BacktestRunDetail)
@@ -71,7 +92,12 @@ def run_detail(
     return _run_to_detail(session, run_id)
 
 
-def _run_to_detail(session: Session, run_id: int) -> BacktestRunDetail:
+def _run_to_detail(
+    session: Session,
+    run_id: int,
+    *,
+    probability_source: str = "market",
+) -> BacktestRunDetail:
     run = session.get(BacktestRun, run_id)
     if run is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Backtest run not found")
@@ -132,4 +158,5 @@ def _run_to_detail(session: Session, run_id: int) -> BacktestRunDetail:
         max_drawdown=run.max_drawdown,
         calibration=calibration,
         equity_curve=equity_curve,
+        probability_source="model" if probability_source == "model" else "market",
     )

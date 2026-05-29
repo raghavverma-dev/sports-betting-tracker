@@ -1965,3 +1965,83 @@ select.config-input {
 .row-suspect .diag-reason {
   color: #f87171;
 }
+
+/* ===== Backtest: Model vs Market comparison ===== */
+.btn-accent {
+  background: var(--cyan);
+  color: var(--primary-ink);
+  font-weight: 700;
+}
+.btn-accent:hover {
+  filter: brightness(1.1);
+}
+.btn-accent:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.config-compare {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+.config-compare .btn-accent {
+  width: 100%;
+}
+
+.comparison-card {
+  border: 1px solid var(--border-strong);
+}
+.comparison-header {
+  margin-bottom: 1rem;
+}
+.comparison-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+.comparison-col {
+  background: var(--bg-card-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.comparison-col.winner {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary) inset;
+}
+.comparison-source {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.comparison-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.comparison-big {
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.comparison-sub {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.comparison-verdict {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--bg-card-raised);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
