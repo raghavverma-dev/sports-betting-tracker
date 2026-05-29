@@ -45,8 +45,10 @@ frontend UX, backend API design, and quantitative engineering:
 - **Backend:** Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2.0
 - **Data:** Postgres, Alembic migrations, synthetic NBA seed corpus,
   optional real NBA/SBR ingestion
-- **Quant:** implied probability, de-vigging, expected value, Kelly
-  sizing, Brier score, log loss, calibration, ROI, max drawdown
+- **Quant / ML:** implied probability, de-vigging, expected value, Kelly
+  sizing, Brier score, log loss, calibration, ROI, max drawdown; a
+  LightGBM moneyline model with Elo-based opponent-adjusted features and
+  cross-validated isotonic calibration (scikit-learn)
 - **Tooling:** Docker Compose, pytest, Ruff, mypy, ESLint, TypeScript
 
 > **Note on data**: the historical corpus shipped with the seed script
@@ -83,7 +85,7 @@ frontend UX, backend API design, and quantitative engineering:
 - `src/betedge/models.py` — SQLAlchemy 2.0 ORM models
 - `src/betedge/schemas.py` — Pydantic v2 request/response schemas
 - `alembic/` — versioned migrations
-- `tests/` — pytest suite (57 tests, in-memory SQLite fixtures)
+- `tests/` — pytest suite (81 tests, in-memory SQLite fixtures)
 
 **Frontend (`src/`)**
 - `pages/Backtest.tsx` — new page that drives the backend: run a
@@ -145,6 +147,23 @@ can be used to train and backtest the model.
 cd backend
 pip install -e '.[ml]'   # pulls nba_api, openpyxl, lightgbm, etc.
 ```
+
+### Fast path: bulk-ingest many seasons from one CSV
+
+The public Kaggle dataset `nba_2008-2025.csv` ships game results *and*
+closing moneylines in a single wide CSV, so one offline pass populates
+both games and odds — no network calls, fully reproducible. This is how
+the shipped model corpus (16 seasons, ~18.5k games) was built:
+
+```bash
+# Each call loads one season's games + consensus closing moneylines.
+betedge data ingest-kaggle --season 2008-09 --path data/nba_2008-2025.csv
+betedge data ingest-kaggle --season 2009-10 --path data/nba_2008-2025.csv
+# ... through 2023-24. Re-running is idempotent (skips existing rows).
+```
+
+The nba_api + SBR path below is the alternative when you want
+officially-sourced results with per-row score cross-validation.
 
 ### Ingest a season
 
@@ -222,7 +241,7 @@ Interview talking points:
   migrations, and an append-only bankroll ledger.
 - **Quant logic:** odds normalization, de-vigging, EV ranking, Kelly
   sizing, and outlier/stale line handling.
-- **Testing/quality:** 57 backend tests plus Ruff, mypy, ESLint, and a
+- **Testing/quality:** 81 backend tests plus Ruff, mypy, ESLint, and a
   passing frontend production build.
 - **Tradeoffs:** synthetic data is reproducible for demos; real data
   ingestion exists but would need a richer feature pipeline before any
@@ -297,7 +316,7 @@ npm run build        # tsc + vite bundle
 npm run lint         # eslint
 ```
 
-Current state: 57 backend tests, zero ESLint issues, zero ruff issues,
+Current state: 81 backend tests, zero ESLint issues, zero ruff issues,
 zero mypy issues, and a passing production frontend build.
 
 GitHub Actions workflow content is included at
@@ -324,43 +343,69 @@ backtest engine as an alternative probability source, so it can be
 scored against the de-vigged market on identical games.
 
 ```bash
-# Train on an ingested real season (chronological train/test split).
-betedge ml train --season 2021-22-real
+# Train on every ingested real season (chronological split, k-fold
+# calibration). Omit --season to use the full multi-season corpus.
+betedge ml train
 
 # Backtest the model's predictions, scored ONLY on held-out games.
 betedge backtest run --probability-source model --season 2021-22-real
 
 # Same games, market consensus as the prediction — the bar to beat.
 betedge backtest run --probability-source market --season 2021-22-real
+
+# Point a fractional-Kelly EV strategy at the model to see ROI/drawdown.
+betedge backtest run --strategy kelly-ev-threshold \
+    --probability-source model --season 2021-22-real --min-ev 2
 ```
 
 Design notes that matter:
 
-- **Features are strictly pre-game** (`ml/features.py`): rolling win% and
-  point differential, season-to-date record, and rest days, all computed
-  by walking games in time order so a feature row never sees its own (or
-  any future) result.
+- **Features are strictly pre-game** (`ml/features.py`), in three groups:
+  - *Form* (resets each season): rolling win% and point differential,
+    season-to-date record, games played.
+  - *Schedule*: rest days, rest advantage, and back-to-back flags.
+  - *Opponent-adjusted strength*: an **Elo rating** carried across the
+    whole corpus (regressed toward the league mean at each season
+    boundary) plus the home/away Elo diff. Elo is the most important
+    feature by gain — unlike win%, it credits *who* you beat.
+
+  Every row is computed by walking games in time order and updating each
+  team's state (form *and* Elo) only *after* its row is emitted, so a
+  feature row never sees its own (or any future) result.
 - **The split is chronological, never random** — training on the earliest
   games and evaluating on the most recent. A random split leaks future
   form into past predictions.
+- **Calibration is cross-validated.** Instead of a single fragile
+  validation slice, an isotonic `CalibratedClassifierCV` (k-fold
+  `TimeSeriesSplit`) is fit inside the train slice, and kept only if it
+  beats the raw booster on the held-out test slice. Both raw and
+  calibrated metrics are always reported.
 - **The backtest scores held-out games only.** The trained model records
   its training game IDs; the serving source refuses to predict those, so
   a run can't grade the model on data it already saw.
 
-On real 2021-22 NBA data the model lands around **Brier 0.233** on its
-held-out slice versus **~0.209** for the de-vigged closing line on the
-same games. The market wins — as it should. NBA closing lines are very
-sharp, and a compact one-season model with no player, injury, or lineup
-data is not expected to beat them. The deliverable here is the honest,
-leakage-safe pipeline and the harness that proves the comparison, not a
-market-beating edge.
+The model trains on **16 ingested NBA seasons (2008-09 .. 2023-24, ~18.5k
+games)**. On the held-out **2021-22** season it lands around **Brier
+0.227 / log loss 0.646**, versus **~0.209 / 0.605** for the de-vigged
+closing line on the *same* games. The market still wins — as it should.
+NBA closing lines are very sharp, and a model with no player, injury, or
+lineup data is not expected to beat them. (Multi-season + Elo did narrow
+the gap from the earlier one-season model, which sat at ~0.233.)
+
+The ROI harness makes the consequence concrete: pointing a
+fractional-Kelly EV strategy at the model's probabilities, the model
+*thinks* it sees edges against the book, places ~900 bets on the
+held-out season, and bleeds the bankroll down against the vig — exactly
+what a slightly-worse-than-market forecaster should do. The deliverable
+here is the honest, leakage-safe pipeline and the harness that proves the
+comparison, not a market-beating edge.
 
 ## Future Work
 
-The clearest path to a competitive model is richer features (player
-availability, travel/back-to-backs, opponent-adjusted ratings) and more
-seasons of training data, evaluated through the same calibration and ROI
-harness that already exists.
+The clearest remaining path to a competitive model is richer features the
+public data doesn't carry — player availability/injuries, lineup and
+minutes data, opponent-adjusted offensive/defensive ratings — evaluated
+through the same calibration and ROI harness that already exists.
 
 ## Responsible use
 

@@ -365,11 +365,19 @@ def ml_group() -> None:
 )
 @click.option("--test-fraction", default=0.2, show_default=True, type=float)
 @click.option("--window", default=10, show_default=True, type=int)
+@click.option("--calibration-folds", default=5, show_default=True, type=int)
 def ml_train_cmd(
-    sport: str, season: str | None, test_fraction: float, window: int
+    sport: str,
+    season: str | None,
+    test_fraction: float,
+    window: int,
+    calibration_folds: int,
 ) -> None:
-    """Train the LightGBM moneyline model and persist it to disk."""
+    """Train the LightGBM moneyline model (cross-validated calibration)."""
     from betedge.ml.model import train_model
+
+    def _r(x: float | None) -> float | None:
+        return round(x, 5) if x is not None else None
 
     with SessionLocal() as session:
         result = train_model(
@@ -378,17 +386,24 @@ def ml_train_cmd(
             season=season,
             test_fraction=test_fraction,
             window=window,
+            calibration_folds=calibration_folds,
         )
     click.echo(
         json.dumps(
             {
                 "model_path": str(result.model_path),
-                "train_rows": result.train_rows,
-                "test_rows": result.test_rows,
-                "test_brier": round(result.test_brier, 5) if result.test_brier else None,
-                "test_log_loss": (
-                    round(result.test_log_loss, 5) if result.test_log_loss else None
-                ),
+                "rows": {
+                    "train": result.train_rows,
+                    "test": result.test_rows,
+                },
+                "test_brier": {
+                    "raw": _r(result.test_brier_raw),
+                    "calibrated": _r(result.test_brier_calibrated),
+                },
+                "test_log_loss": {
+                    "raw": _r(result.test_log_loss_raw),
+                    "calibrated": _r(result.test_log_loss_calibrated),
+                },
                 "feature_importance": dict(
                     sorted(
                         result.feature_importance.items(),

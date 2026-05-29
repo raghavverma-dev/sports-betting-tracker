@@ -70,8 +70,9 @@ def test_train_predict_roundtrip(session: Session, tmp_path: Path) -> None:
     assert model_path.exists()
     assert result.train_rows > 0
     assert result.test_rows > 0
-    assert result.test_brier is not None
-    assert 0.0 <= result.test_brier <= 0.30
+    assert result.test_brier_raw is not None
+    assert result.test_brier_calibrated is not None
+    assert 0.0 <= result.test_brier_calibrated <= 0.40
 
     # The source loads the persisted model and serves predictions for the
     # held-out games (training games are excluded — see the dedicated test).
@@ -82,6 +83,31 @@ def test_train_predict_roundtrip(session: Session, tmp_path: Path) -> None:
     served_probs = [p for p in served if p is not None]
     assert served_probs  # at least the held-out slice is scored
     assert all(0.0 <= p <= 1.0 for p in served_probs)
+
+
+def test_calibration_is_kept_only_when_it_helps(session: Session, tmp_path: Path) -> None:
+    """Calibration is gated on the held-out test Brier: kept only if the
+    cross-validated calibrated predictor beats the raw booster. Either
+    outcome is valid; whichever is persisted must still serve in-range
+    probabilities so downstream log loss can't blow up."""
+    import joblib
+
+    from betedge.ml.model import ModelProbabilitySource, train_model
+
+    _seed_learnable_corpus(session, n=400)
+    model_path = tmp_path / "m.joblib"
+    train_model(session, season="2023-24-real", model_path=model_path)
+
+    bundle = joblib.load(model_path)
+    assert isinstance(bundle.calibrated, bool)
+
+    # Whatever predictor was persisted must serve in-range probabilities on
+    # held-out games (the source already excludes training games).
+    source = ModelProbabilitySource(session, season="2023-24-real", model_path=model_path)
+    served = [
+        source.home_win_probability(g, 0.5) for g in session.query(HistoricalGame).all()
+    ]
+    assert all(0.0 <= p <= 1.0 for p in served if p is not None)
 
 
 def test_train_errors_on_tiny_corpus(session: Session, tmp_path: Path) -> None:

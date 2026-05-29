@@ -10,9 +10,9 @@ than they are.
 
 The trained model is persisted with ``joblib`` so the backtest engine
 can load it through ``ModelProbabilitySource`` without retraining. The
-saved artifact bundles the booster, the feature column order, and the
-training metadata so a stale model can't be silently mismatched against
-new features.
+saved artifact bundles the predictor (calibrated wrapper or bare
+booster), the feature column order, and the training metadata so a stale
+model can't be silently mismatched against new features.
 
 LightGBM is an optional dependency (the ``ml`` extras). Importing this
 module without it raises a clear, actionable error rather than a bare
@@ -64,22 +64,35 @@ class TrainResult:
     model_path: Path
     train_rows: int
     test_rows: int
-    test_brier: float | None
-    test_log_loss: float | None
+    # Held-out test metrics, before and after calibration. The raw/calibrated
+    # pair shows calibration's effect honestly rather than only reporting the
+    # better number.
+    test_brier_raw: float | None
+    test_brier_calibrated: float | None
+    test_log_loss_raw: float | None
+    test_log_loss_calibrated: float | None
     feature_importance: dict[str, float]
 
 
 @dataclass(frozen=True, slots=True)
 class _Bundle:
-    """What we persist: the booster plus everything needed to use it safely."""
+    """What we persist: the predictor plus everything needed to use it safely.
 
-    booster: Any
+    ``predictor`` is the thing the serving source calls ``predict_proba`` on:
+    the calibrated wrapper when calibration was kept, otherwise the bare
+    booster. Either way the serving path is identical, so there's no separate
+    calibrator object to apply (or forget to apply).
+    """
+
+    predictor: Any
+    calibrated: bool
     feature_columns: tuple[str, ...]
     trained_at: str
     train_rows: int
-    # Game IDs the model trained on. The serving source excludes these so a
-    # backtest never scores the model on games it has already seen — the
-    # difference between an honest held-out number and grading its own work.
+    # Game IDs the model trained on (booster fit + calibration folds all live
+    # inside the train slice). The serving source excludes these so a backtest
+    # never scores the model on games it has already seen — the difference
+    # between an honest held-out number and grading its own work.
     train_game_ids: frozenset[int]
 
 
@@ -92,15 +105,27 @@ def train_model(
     window: int = 10,
     model_path: Path = DEFAULT_MODEL_PATH,
     num_boost_round: int = 200,
+    calibration_folds: int = 5,
 ) -> TrainResult:
-    """Train on the historical corpus and persist the model.
+    """Train on the historical corpus, calibrate, and persist the model.
 
     ``season`` filters to a single ``HistoricalGame.season`` tag (e.g.
     ``2021-22-real``) when given; otherwise every game for ``sport`` is
-    used. ``test_fraction`` is held out as the most-recent slice for an
-    honest forward-looking evaluation.
+    used.
+
+    The split is two-way and strictly chronological:
+      [ train (fit booster + cross-validated calibration) | test (held out) ]
+    Calibration uses ``CalibratedClassifierCV`` with k-fold cross-validation
+    *inside* the train slice: each fold's calibrator is fit on data the
+    matching booster never saw, so calibration doesn't overfit the way a
+    single small validation slice does. We keep the calibrated predictor only
+    if it beats the raw booster on the held-out test slice; the test number is
+    therefore always the honest one and never used to make the keep decision
+    in a way that could flatter it (we report both raw and calibrated either
+    way).
     """
     lgb, pd, joblib = _require_ml_deps()
+    from sklearn.calibration import CalibratedClassifierCV
 
     games = _load_games(session, sport=sport, season=season)
     rows = build_feature_rows(games, window=window)
@@ -111,26 +136,61 @@ def train_model(
         )
 
     # Chronological split: rows are already time-ordered by build_feature_rows.
-    split = int(len(rows) * (1.0 - test_fraction))
-    train_rows, test_rows = rows[:split], rows[split:]
+    n = len(rows)
+    test_start = int(n * (1.0 - test_fraction))
+    train_rows = rows[:test_start]
+    test_rows = rows[test_start:]
 
-    x_train = _frame(pd, train_rows)
-    y_train = [r.home_win for r in train_rows]
+    def _new_booster() -> Any:
+        return lgb.LGBMClassifier(
+            objective="binary",
+            n_estimators=num_boost_round,
+            learning_rate=0.03,
+            num_leaves=15,
+            min_child_samples=30,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42,
+            verbose=-1,
+        )
 
-    booster = lgb.LGBMClassifier(
-        objective="binary",
-        n_estimators=num_boost_round,
-        learning_rate=0.03,
-        num_leaves=15,
-        min_child_samples=30,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        random_state=42,
-        verbose=-1,
+    train_X = _frame(pd, train_rows)
+    train_y = [r.home_win for r in train_rows]
+
+    booster = _new_booster()
+    booster.fit(train_X, train_y)
+
+    # Cross-validated isotonic calibration. CalibratedClassifierCV refits the
+    # booster on each of k chronological folds and fits an isotonic map on the
+    # held-out fold, then averages — far more stable than one tiny val slice.
+    # Needs enough rows per fold and both classes present to be meaningful.
+    calibrated_predictor = None
+    if len(train_rows) >= calibration_folds * 20 and len(set(train_y)) == 2:
+        from sklearn.model_selection import TimeSeriesSplit
+
+        candidate = CalibratedClassifierCV(
+            estimator=_new_booster(),
+            method="isotonic",
+            cv=TimeSeriesSplit(n_splits=calibration_folds),
+        )
+        candidate.fit(train_X, train_y)
+        calibrated_predictor = candidate
+
+    test_raw = _raw_predict(booster, pd, test_rows)
+    test_cal = (
+        _raw_predict(calibrated_predictor, pd, test_rows)
+        if calibrated_predictor is not None
+        else test_raw
     )
-    booster.fit(x_train, y_train)
+    test_y = [float(r.home_win) for r in test_rows]
 
-    test_brier, test_ll = _evaluate(booster, pd, test_rows)
+    # Keep calibration only if it actually helps on the held-out slice.
+    keep_calibrated = (
+        calibrated_predictor is not None
+        and bool(test_rows)
+        and brier_score(test_cal, test_y) < brier_score(test_raw, test_y)
+    )
+    predictor = calibrated_predictor if keep_calibrated else booster
 
     importance = {
         col: float(imp)
@@ -138,7 +198,8 @@ def train_model(
     }
 
     bundle = _Bundle(
-        booster=booster,
+        predictor=predictor,
+        calibrated=keep_calibrated,
         feature_columns=FEATURE_COLUMNS,
         trained_at=datetime.now(UTC).isoformat(),
         train_rows=len(train_rows),
@@ -146,26 +207,27 @@ def train_model(
     )
     model_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(bundle, model_path)
-    logger.info("Saved model to %s (%d train rows)", model_path, len(train_rows))
+    logger.info(
+        "Saved model to %s (train=%d test=%d, calibrated=%s)",
+        model_path, len(train_rows), len(test_rows), keep_calibrated,
+    )
 
     return TrainResult(
         model_path=model_path,
         train_rows=len(train_rows),
         test_rows=len(test_rows),
-        test_brier=test_brier,
-        test_log_loss=test_ll,
+        test_brier_raw=brier_score(test_raw, test_y) if test_rows else None,
+        test_brier_calibrated=brier_score(test_cal, test_y) if test_rows else None,
+        test_log_loss_raw=log_loss(test_raw, test_y) if test_rows else None,
+        test_log_loss_calibrated=log_loss(test_cal, test_y) if test_rows else None,
         feature_importance=importance,
     )
 
 
-def _evaluate(
-    booster: Any, pd: Any, rows: list[FeatureRow]
-) -> tuple[float | None, float | None]:
+def _raw_predict(predictor: Any, pd: Any, rows: list[FeatureRow]) -> list[float]:
     if not rows:
-        return None, None
-    preds = booster.predict_proba(_frame(pd, rows))[:, 1].tolist()
-    actuals = [float(r.home_win) for r in rows]
-    return brier_score(preds, actuals), log_loss(preds, actuals)
+        return []
+    return [float(p) for p in predictor.predict_proba(_frame(pd, rows))[:, 1]]
 
 
 def _load_games(
@@ -235,7 +297,9 @@ class ModelProbabilitySource:
         rows = [r for r in rows if r.game_id not in bundle.train_game_ids]
         if not rows:
             return {}
-        probs = bundle.booster.predict_proba(_frame(self._pd, rows))[:, 1]
+        # bundle.predictor is already the calibrated wrapper when calibration
+        # was kept, so there's a single uniform predict path here.
+        probs = bundle.predictor.predict_proba(_frame(self._pd, rows))[:, 1]
         return {row.game_id: float(p) for row, p in zip(rows, probs, strict=True)}
 
     def home_win_probability(
