@@ -218,6 +218,50 @@ def data_ingest_sbr_cmd(season: str, xlsx_path: Path, book: str) -> None:
     )
 
 
+@data_group.command("ingest-kaggle")
+@click.option("--season", required=True, help="Season label, e.g. '2023-24'.")
+@click.option(
+    "--path",
+    "csv_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Kaggle nba_2008-2025.csv (games + moneylines in one wide CSV).",
+)
+@click.option("--book", default="consensus", show_default=True)
+@click.option(
+    "--include-playoffs",
+    is_flag=True,
+    default=False,
+    help="Include playoff games (regular season only by default).",
+)
+def data_ingest_kaggle_cmd(
+    season: str, csv_path: Path, book: str, include_playoffs: bool
+) -> None:
+    """Ingest games + closing moneylines for a season from the Kaggle CSV."""
+    from betedge.ml.kaggle import ingest_kaggle_csv
+
+    with SessionLocal() as session:
+        result = ingest_kaggle_csv(
+            session,
+            csv_path,
+            season=season,
+            book=book,
+            regular_season_only=not include_playoffs,
+        )
+    click.echo(
+        json.dumps(
+            {
+                "season": f"{season}-real",
+                "games_inserted": result.games_inserted,
+                "games_skipped": result.games_skipped,
+                "odds_inserted": result.odds_inserted,
+                "odds_skipped": result.odds_skipped,
+            },
+            indent=2,
+        )
+    )
+
+
 @data_group.command("verify")
 @click.option("--season", required=True, help="Season to verify, e.g. '2023-24'.")
 def data_verify_cmd(season: str) -> None:
