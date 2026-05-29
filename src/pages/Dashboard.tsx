@@ -26,8 +26,8 @@ export default function Dashboard() {
         )}
       </div>
 
-      <div className="stats-grid">
-        <div className="stat-card">
+      <div className="stats-grid reveal">
+        <div className="stat-card hero">
           <span className="stat-label">Bankroll</span>
           <span className="stat-value">{formatCurrency(state.bankroll)}</span>
           <span className={`stat-delta ${state.bankroll - state.initialBankroll >= 0 ? 'positive' : 'negative'}`}>
@@ -58,19 +58,20 @@ export default function Dashboard() {
           <h2>Bankroll Over Time</h2>
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-              <XAxis dataKey="date" stroke="#888" fontSize={12} />
-              <YAxis stroke="#888" fontSize={12} tickFormatter={(v) => `$${v}`} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#21262d" vertical={false} />
+              <XAxis dataKey="date" stroke="#545d68" fontSize={11} tickLine={false} axisLine={{ stroke: '#21262d' }} />
+              <YAxis stroke="#545d68" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} />
               <Tooltip
-                contentStyle={{ backgroundColor: '#1e1e2e', border: '1px solid #444', borderRadius: 8 }}
+                contentStyle={{ backgroundColor: '#181b1f', border: '1px solid #2f363d', borderRadius: 6, fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }}
                 formatter={(value) => [formatCurrency(value as number), 'Balance']}
               />
               <Line
                 type="monotone"
                 dataKey="balance"
-                stroke="#6366f1"
+                stroke="#d4f04a"
                 strokeWidth={2}
-                dot={{ fill: '#6366f1', r: 4 }}
+                dot={false}
+                activeDot={{ fill: '#d4f04a', r: 4 }}
               />
             </LineChart>
           </ResponsiveContainer>
