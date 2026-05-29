@@ -1,10 +1,11 @@
-"""Real-data ingestion for the NBA modeling pipeline.
+"""The NBA modeling pipeline: ingestion, features, and the model.
 
-Currently implemented: ingestion of real game results (``data.py`` via
-nba_api) and historical odds (``data.py`` CSV reader, ``sbr.py`` XLSX
-reader). Feature engineering, model training, and inference are not yet
-built — the trained-model strategy is the next step. The evaluation
-harness it will plug into already exists in ``backtest/``.
+Modules:
+  - ``data.py`` — real game results (nba_api) and odds (CSV / SBR XLSX).
+  - ``kaggle.py`` — single-CSV ingester (games + closing moneylines).
+  - ``features.py`` — leakage-safe pre-game feature engineering.
+  - ``model.py`` — LightGBM training, persistence, and the
+    ``ModelProbabilitySource`` that feeds the backtest engine.
 
 Kept separate from ``backtest/seed.py`` (which generates synthetic data)
 so the two stay unambiguously distinct. Seasons ingested here are

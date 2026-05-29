@@ -18,6 +18,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import ClassVar, Protocol
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -41,14 +42,50 @@ from betedge.services.odds_math import implied_probability
 logger = logging.getLogger(__name__)
 
 
+class ProbabilitySource(Protocol):
+    """Supplies the probability a strategy treats as its own forecast.
+
+    The engine always de-vigs the market separately (for the EV decision
+    and the calibration curve); this hook decides what the *prediction*
+    is. The market source echoes the de-vigged market back, so
+    market-baseline scores the market against reality. A model source
+    ignores ``market_home_prob`` and returns a learned P(home win) that
+    can disagree with the market — which is the whole point of a model.
+    """
+
+    @property
+    def name(self) -> str:
+        """Short identifier recorded on the run (e.g. 'market', 'model')."""
+        ...
+
+    def home_win_probability(
+        self, game: HistoricalGame, market_home_prob: float
+    ) -> float | None:
+        """Return P(home win) in [0, 1], or None to skip this game."""
+        ...
+
+
+class MarketProbabilitySource:
+    """Default source: the prediction *is* the de-vigged market price."""
+
+    name: ClassVar[str] = "market"
+
+    def home_win_probability(
+        self, game: HistoricalGame, market_home_prob: float
+    ) -> float | None:  # noqa: ARG002
+        return market_home_prob
+
+
 @dataclass(frozen=True, slots=True)
 class EngineConfig:
     strategy: Strategy
     sport: str
     market: str = "h2h"
+    season: str | None = None
     start_date: datetime | None = None
     end_date: datetime | None = None
     initial_bankroll: float = 1000.0
+    probability_source: ProbabilitySource = field(default_factory=MarketProbabilitySource)
 
 
 @dataclass(slots=True)
@@ -71,6 +108,8 @@ def _query_games(session: Session, config: EngineConfig) -> list[HistoricalGame]
         .where(HistoricalGame.sport == config.sport)
         .order_by(HistoricalGame.commence_time.asc())
     )
+    if config.season is not None:
+        stmt = stmt.where(HistoricalGame.season == config.season)
     if config.start_date is not None:
         stmt = stmt.where(HistoricalGame.commence_time >= config.start_date)
     if config.end_date is not None:
@@ -175,20 +214,37 @@ def run_backtest(
         # market consensus is the "prediction" and the realized outcome
         # is 1 for the winning side, 0 for the loser. Draws contribute 0
         # to both (rare in h2h outside MLS).
-        home_prob = _devigged_market_probability(
+        market_home_prob = _devigged_market_probability(
             game.odds, game, config.market, target=game.home_team
         )
-        if home_prob is None:
+        if market_home_prob is None:
             continue
-        away_prob = 1.0 - home_prob  # h2h: forced complement after de-vig
+        market_away_prob = 1.0 - market_home_prob  # h2h complement after de-vig
+
+        # The prediction (what the strategy bets on and what the forecast
+        # metrics score) comes from the configured source. The market
+        # source echoes the de-vig; a model source overrides it.
+        pred_home = config.probability_source.home_win_probability(game, market_home_prob)
+        if pred_home is None:
+            continue
+        pred_home = min(max(pred_home, 0.0), 1.0)
+        pred_away = 1.0 - pred_home
 
         home_win = 1.0 if game.winner == "home" else 0.0
         away_win = 1.0 if game.winner == "away" else 0.0
-        predictions.extend([home_prob, away_prob])
+        predictions.extend([pred_home, pred_away])
         outcomes.extend([home_win, away_win])
 
         decision, realized = _evaluate_strategy(
-            config.strategy, game, home_best, away_best, home_prob, away_prob, bankroll
+            config.strategy,
+            game,
+            home_best,
+            away_best,
+            pred_home,
+            pred_away,
+            market_home_prob,
+            market_away_prob,
+            bankroll,
         )
         if decision is None:
             continue
@@ -270,8 +326,10 @@ def _evaluate_strategy(
     game: HistoricalGame,
     home_best: tuple[str, int, str],
     away_best: tuple[str, int, str],
-    home_prob: float,
-    away_prob: float,
+    pred_home: float,
+    pred_away: float,
+    market_home: float,
+    market_away: float,
     bankroll: float,
 ) -> tuple[BetDecision | None, _Realized]:
     """Ask the strategy to consider each side and return the chosen bet.
@@ -282,8 +340,8 @@ def _evaluate_strategy(
     already behaves via the `usedGameIds` block.
     """
     for (selection, american_odds, book), predicted, market in (
-        (home_best, home_prob, home_prob),
-        (away_best, away_prob, away_prob),
+        (home_best, pred_home, market_home),
+        (away_best, pred_away, market_away),
     ):
         quote = GameQuote(
             game_id=game.id,

@@ -1,0 +1,144 @@
+"""Tests for model training, persistence, and the engine source.
+
+The LightGBM-dependent tests skip cleanly when the 'ml' extras (or the
+native OpenMP runtime LightGBM needs) aren't available, so the core
+suite still runs everywhere.
+"""
+
+from __future__ import annotations
+
+import random
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+from sqlalchemy.orm import Session
+
+from betedge.backtest.engine import EngineConfig, run_backtest
+from betedge.backtest.strategies import build_strategy
+from betedge.models import HistoricalGame, HistoricalOdds
+
+lgbm_required = pytest.importorskip("lightgbm", reason="ml extras not installed")
+
+
+def _seed_learnable_corpus(session: Session, *, n: int = 300, seed: int = 7) -> None:
+    """Insert games with a learnable signal: a fixed per-team strength
+    drives outcomes, so a model has something real to fit. Each game gets
+    a consensus moneyline so the engine has a full h2h market."""
+    rng = random.Random(seed)
+    teams = [f"T{i}" for i in range(10)]
+    strength = {t: rng.uniform(-0.3, 0.3) for t in teams}
+    base = datetime(2023, 10, 24, 19, tzinfo=UTC)
+
+    for i in range(n):
+        home, away = rng.sample(teams, 2)
+        edge = strength[home] + 0.08 - strength[away]  # home-court bump
+        home_wins = rng.random() < (0.5 + edge)
+        hs, as_ = (110, 100) if home_wins else (100, 110)
+        game = HistoricalGame(
+            external_id=f"learn-{i}",
+            sport="NBA",
+            season="2023-24-real",
+            commence_time=base + timedelta(hours=i * 6),
+            home_team=home,
+            away_team=away,
+            home_score=hs,
+            away_score=as_,
+            winner="home" if home_wins else "away",
+        )
+        session.add(game)
+        session.flush()
+        for outcome, ml in ((home, -120), (away, +110)):
+            session.add(
+                HistoricalOdds(
+                    game_id=game.id, book="consensus", market="h2h",
+                    outcome=outcome, american_odds=ml,
+                )
+            )
+    session.commit()
+
+
+def test_train_predict_roundtrip(session: Session, tmp_path: Path) -> None:
+    from betedge.ml.model import ModelProbabilitySource, train_model
+
+    _seed_learnable_corpus(session, n=300)
+    model_path = tmp_path / "m.joblib"
+
+    result = train_model(
+        session, season="2023-24-real", test_fraction=0.2, model_path=model_path
+    )
+    assert model_path.exists()
+    assert result.train_rows > 0
+    assert result.test_rows > 0
+    assert result.test_brier is not None
+    assert 0.0 <= result.test_brier <= 0.30
+
+    # The source loads the persisted model and serves predictions for the
+    # held-out games (training games are excluded — see the dedicated test).
+    source = ModelProbabilitySource(session, season="2023-24-real", model_path=model_path)
+    served = [
+        source.home_win_probability(g, 0.5) for g in session.query(HistoricalGame).all()
+    ]
+    served_probs = [p for p in served if p is not None]
+    assert served_probs  # at least the held-out slice is scored
+    assert all(0.0 <= p <= 1.0 for p in served_probs)
+
+
+def test_train_errors_on_tiny_corpus(session: Session, tmp_path: Path) -> None:
+    from betedge.ml.model import train_model
+
+    _seed_learnable_corpus(session, n=10)
+    with pytest.raises(ValueError, match="Not enough games"):
+        train_model(session, season="2023-24-real", model_path=tmp_path / "m.joblib")
+
+
+def test_missing_model_file_raises(session: Session, tmp_path: Path) -> None:
+    from betedge.ml.model import ModelProbabilitySource
+
+    with pytest.raises(FileNotFoundError, match="No trained model"):
+        ModelProbabilitySource(session, model_path=tmp_path / "absent.joblib")
+
+
+def test_engine_uses_model_source_end_to_end(session: Session, tmp_path: Path) -> None:
+    from betedge.ml.model import ModelProbabilitySource, train_model
+
+    _seed_learnable_corpus(session, n=300)
+    model_path = tmp_path / "m.joblib"
+    train_model(session, season="2023-24-real", model_path=model_path)
+
+    config = EngineConfig(
+        strategy=build_strategy("market-baseline"),
+        sport="NBA",
+        season="2023-24-real",
+        probability_source=ModelProbabilitySource(
+            session, season="2023-24-real", model_path=model_path
+        ),
+    )
+    result = run_backtest(session, config, persist=False)
+    assert result.games_evaluated == 300
+    # Model predictions (not the market) drive the forecast metrics now.
+    assert result.brier_score is not None
+    assert 0.0 <= result.brier_score <= 0.40
+
+
+def test_model_source_excludes_training_games(session: Session, tmp_path: Path) -> None:
+    """The honest-evaluation guard: the source must refuse to predict on
+    games the model trained on, so a backtest can't grade its own work."""
+    import joblib
+
+    from betedge.ml.model import ModelProbabilitySource, train_model
+
+    _seed_learnable_corpus(session, n=300)
+    model_path = tmp_path / "m.joblib"
+    train_model(session, season="2023-24-real", test_fraction=0.2, model_path=model_path)
+
+    bundle = joblib.load(model_path)
+    assert len(bundle.train_game_ids) > 0
+
+    source = ModelProbabilitySource(session, season="2023-24-real", model_path=model_path)
+    games = session.query(HistoricalGame).all()
+    train_game = next(g for g in games if g.id in bundle.train_game_ids)
+    test_game = next(g for g in games if g.id not in bundle.train_game_ids)
+
+    assert source.home_win_probability(train_game, 0.5) is None  # excluded
+    assert source.home_win_probability(test_game, 0.5) is not None  # served

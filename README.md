@@ -132,13 +132,12 @@ npm run dev
 
 ## Loading real historical NBA data
 
-The synthetic corpus is fine for demos, but a trained forecasting model
-(the planned next step — see Future Work) will need real data to be
-meaningful. The project ships the ingestion half of that pipeline: it
-pulls game results from the official NBA stats API and attaches closing
-moneylines from a CSV (e.g. a Kaggle odds dataset) or from
-SportsBookReviewsOnline (SBR) archives. Feature engineering and model
-training are not built yet.
+The synthetic corpus is fine for demos, but the forecasting model
+(see Forecasting model below) needs real data to be meaningful. The
+project pulls game results from the official NBA stats API and attaches
+closing moneylines from a CSV (e.g. a Kaggle odds dataset) or from
+SportsBookReviewsOnline (SBR) archives. Once a season is ingested, it
+can be used to train and backtest the model.
 
 ### One-time setup
 
@@ -318,18 +317,50 @@ GitHub Actions workflow content is included at
   Finder uses the backend `ODDS_API_KEY` so the key does not need to be
   stored in the browser.
 
+## Forecasting model
+
+The platform includes a LightGBM moneyline model that plugs into the
+backtest engine as an alternative probability source, so it can be
+scored against the de-vigged market on identical games.
+
+```bash
+# Train on an ingested real season (chronological train/test split).
+betedge ml train --season 2021-22-real
+
+# Backtest the model's predictions, scored ONLY on held-out games.
+betedge backtest run --probability-source model --season 2021-22-real
+
+# Same games, market consensus as the prediction — the bar to beat.
+betedge backtest run --probability-source market --season 2021-22-real
+```
+
+Design notes that matter:
+
+- **Features are strictly pre-game** (`ml/features.py`): rolling win% and
+  point differential, season-to-date record, and rest days, all computed
+  by walking games in time order so a feature row never sees its own (or
+  any future) result.
+- **The split is chronological, never random** — training on the earliest
+  games and evaluating on the most recent. A random split leaks future
+  form into past predictions.
+- **The backtest scores held-out games only.** The trained model records
+  its training game IDs; the serving source refuses to predict those, so
+  a run can't grade the model on data it already saw.
+
+On real 2021-22 NBA data the model lands around **Brier 0.233** on its
+held-out slice versus **~0.209** for the de-vigged closing line on the
+same games. The market wins — as it should. NBA closing lines are very
+sharp, and a compact one-season model with no player, injury, or lineup
+data is not expected to beat them. The deliverable here is the honest,
+leakage-safe pipeline and the harness that proves the comparison, not a
+market-beating edge.
+
 ## Future Work
 
-The core platform is complete: live odds ranking, paper bet tracking,
-bankroll analytics, real-data ingestion, and a backtest/evaluation
-harness all run locally, with CI on every push.
-
-The next meaningful step is the forecasting model itself: engineer
-team-strength features from the ingested historical games, train a
-LightGBM moneyline classifier, and register it as a new `Strategy` that
-feeds its predicted probabilities into the existing backtest engine. The
-calibration and ROI harness is already built to measure whether that
-model improves on the de-vigged market baseline.
+The clearest path to a competitive model is richer features (player
+availability, travel/back-to-backs, opponent-adjusted ratings) and more
+seasons of training data, evaluated through the same calibration and ROI
+harness that already exists.
 
 ## Responsible use
 

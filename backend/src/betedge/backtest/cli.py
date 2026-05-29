@@ -18,12 +18,30 @@ from datetime import datetime
 from pathlib import Path
 
 import click
+from sqlalchemy.orm import Session
 
-from betedge.backtest.engine import EngineConfig, run_backtest
+from betedge.backtest.engine import (
+    EngineConfig,
+    MarketProbabilitySource,
+    ProbabilitySource,
+    run_backtest,
+)
 from betedge.backtest.seed import SeedConfig, seed_historical_games
 from betedge.backtest.strategies import build_strategy
 from betedge.db import SessionLocal
 from betedge.models import BacktestRun
+
+
+def _build_probability_source(
+    kind: str, session: Session, *, sport: str, season: str | None
+) -> ProbabilitySource:
+    if kind == "market":
+        return MarketProbabilitySource()
+    if kind == "model":
+        from betedge.ml.model import ModelProbabilitySource
+
+        return ModelProbabilitySource(session, sport=sport, season=season)
+    raise click.BadParameter(f"Unknown probability source: {kind}")
 
 
 @click.group()
@@ -64,6 +82,18 @@ def backtest_group() -> None:
 @click.option("--min-ev", default=2.0, show_default=True, type=float)
 @click.option("--kelly-fraction", default=0.25, show_default=True, type=float)
 @click.option("--max-stake-percent", default=5.0, show_default=True, type=float)
+@click.option(
+    "--probability-source",
+    type=click.Choice(["market", "model"]),
+    default="market",
+    show_default=True,
+    help="Where predictions come from: de-vigged market, or the trained model.",
+)
+@click.option(
+    "--season",
+    default=None,
+    help="DB season tag to scope the run + model, e.g. '2021-22-real'.",
+)
 def backtest_run_cmd(
     strategy: str,
     sport: str,
@@ -74,6 +104,8 @@ def backtest_run_cmd(
     min_ev: float,
     kelly_fraction: float,
     max_stake_percent: float,
+    probability_source: str,
+    season: str | None,
 ) -> None:
     """Run a backtest over the seeded corpus and print summary metrics."""
     strat = build_strategy(
@@ -82,15 +114,20 @@ def backtest_run_cmd(
         kelly_fraction=kelly_fraction,
         max_stake_percent=max_stake_percent,
     )
-    config = EngineConfig(
-        strategy=strat,
-        sport=sport,
-        market=market,
-        start_date=datetime.fromisoformat(start) if start else None,
-        end_date=datetime.fromisoformat(end) if end else None,
-        initial_bankroll=initial_bankroll,
-    )
     with SessionLocal() as session:
+        source = _build_probability_source(
+            probability_source, session, sport=sport, season=season
+        )
+        config = EngineConfig(
+            strategy=strat,
+            sport=sport,
+            market=market,
+            season=season,
+            start_date=datetime.fromisoformat(start) if start else None,
+            end_date=datetime.fromisoformat(end) if end else None,
+            initial_bankroll=initial_bankroll,
+            probability_source=source,
+        )
         result = run_backtest(session, config)
 
     click.echo(
@@ -98,6 +135,7 @@ def backtest_run_cmd(
             {
                 "run_id": result.run_id,
                 "strategy": strat.name,
+                "probability_source": source.name,
                 "games_evaluated": result.games_evaluated,
                 "bets_placed": result.bets_placed,
                 "initial_bankroll": initial_bankroll,
@@ -307,6 +345,57 @@ def data_verify_cmd(season: str) -> None:
                     round(100 * games_with_odds / game_count, 1) if game_count else 0.0
                 ),
                 "odds_rows_by_book": {book: count for book, count in book_stats},
+            },
+            indent=2,
+        )
+    )
+
+
+@cli.group("ml")
+def ml_group() -> None:
+    """Train and inspect the moneyline forecasting model."""
+
+
+@ml_group.command("train")
+@click.option("--sport", default="NBA", show_default=True)
+@click.option(
+    "--season",
+    default=None,
+    help="DB season tag to train on, e.g. '2021-22-real'. Omit to use all games.",
+)
+@click.option("--test-fraction", default=0.2, show_default=True, type=float)
+@click.option("--window", default=10, show_default=True, type=int)
+def ml_train_cmd(
+    sport: str, season: str | None, test_fraction: float, window: int
+) -> None:
+    """Train the LightGBM moneyline model and persist it to disk."""
+    from betedge.ml.model import train_model
+
+    with SessionLocal() as session:
+        result = train_model(
+            session,
+            sport=sport,
+            season=season,
+            test_fraction=test_fraction,
+            window=window,
+        )
+    click.echo(
+        json.dumps(
+            {
+                "model_path": str(result.model_path),
+                "train_rows": result.train_rows,
+                "test_rows": result.test_rows,
+                "test_brier": round(result.test_brier, 5) if result.test_brier else None,
+                "test_log_loss": (
+                    round(result.test_log_loss, 5) if result.test_log_loss else None
+                ),
+                "feature_importance": dict(
+                    sorted(
+                        result.feature_importance.items(),
+                        key=lambda kv: kv[1],
+                        reverse=True,
+                    )
+                ),
             },
             indent=2,
         )

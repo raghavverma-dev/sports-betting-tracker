@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from betedge.backtest.engine import EngineConfig, run_backtest
 from betedge.backtest.seed import SeedConfig, seed_historical_games
 from betedge.backtest.strategies import build_strategy
+from betedge.models import HistoricalGame
 
 
 def test_seed_then_backtest_market_baseline_reports_forecast_metrics(session: Session) -> None:
@@ -56,3 +57,28 @@ def test_kelly_ev_strategy_places_some_bets_when_threshold_is_low(session: Sessi
     assert result.bets_placed >= 1
     assert result.run_id is not None
     assert result.brier_score is not None
+
+
+def test_custom_probability_source_overrides_market(session: Session) -> None:
+    """A non-market source replaces the prediction the engine scores —
+    proving the model hook is wired through without needing LightGBM."""
+    seed_historical_games(session, SeedConfig(num_games=40, seed=3))
+
+    class AlwaysHalf:
+        name = "stub"
+
+        def home_win_probability(
+            self, game: HistoricalGame, market_home_prob: float
+        ) -> float | None:
+            return 0.5  # deliberately uninformative
+
+    config = EngineConfig(
+        strategy=build_strategy("market-baseline"),
+        sport="NBA",
+        probability_source=AlwaysHalf(),
+    )
+    result = run_backtest(session, config, persist=False)
+
+    # Every prediction is 0.5, so Brier = mean((0.5 - y)^2) = 0.25 exactly.
+    assert result.brier_score is not None
+    assert abs(result.brier_score - 0.25) < 1e-9

@@ -218,7 +218,7 @@ def ingest_nba_games(
 def _fetch_nba_games(nba_season: str) -> list[dict[str, Any]]:  # pragma: no cover
     """Live call into nba_api; bypassed in tests via the ``fetch_fn`` seam."""
     try:
-        from nba_api.stats.endpoints import leaguegamefinder  # type: ignore[import-not-found]
+        from nba_api.stats.endpoints import leaguegamefinder
     except ImportError as e:
         raise RuntimeError(
             "nba_api is not installed. Install the 'ml' extras: pip install -e '.[ml]'"
