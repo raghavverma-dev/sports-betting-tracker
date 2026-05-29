@@ -170,7 +170,17 @@ html, body, #root {
 }
 
 .nav-icon {
-  font-size: 1rem;
+  flex-shrink: 0;
+  color: var(--text-faint);
+  transition: color 0.15s ease;
+}
+
+.nav-link:hover .nav-icon {
+  color: var(--text-muted);
+}
+
+.nav-link.active .nav-icon {
+  color: var(--primary);
 }
 
 .sidebar-footer {
@@ -334,6 +344,35 @@ html, body, #root {
 .reveal > *:nth-child(3) { animation-delay: 0.16s; }
 .reveal > *:nth-child(4) { animation-delay: 0.22s; }
 .reveal > *:nth-child(5) { animation-delay: 0.28s; }
+
+.load-rise {
+  opacity: 0;
+  animation: rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.scroll-reveal {
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity 0.55s cubic-bezier(0.22, 1, 0.36, 1),
+              transform 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform;
+}
+
+.scroll-reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scroll-reveal,
+  .load-rise,
+  .reveal > * {
+    opacity: 1;
+    transform: none;
+    transition: none;
+    animation: none;
+  }
+}
 
 .stat-card {
   position: relative;

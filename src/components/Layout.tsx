@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { LayoutDashboard, ClipboardList, Star, Zap, FlaskConical, BarChart3 } from 'lucide-react';
 import { useApp } from '../context/useApp';
 import { formatCurrency } from '../utils/odds';
 import { loadAutoBetState, subscribeToAutoBetState } from '../utils/autoBettor';
@@ -34,22 +35,22 @@ export default function Layout() {
 
         <div className="nav-links">
           <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} end>
-            <span className="nav-icon">&#9632;</span> Dashboard
+            <LayoutDashboard className="nav-icon" size={17} strokeWidth={2} /> <span>Dashboard</span>
           </NavLink>
           <NavLink to="/tracker" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-            <span className="nav-icon">&#9998;</span> Bet Tracker
+            <ClipboardList className="nav-icon" size={17} strokeWidth={2} /> <span>Bet Tracker</span>
           </NavLink>
           <NavLink to="/value" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-            <span className="nav-icon">&#9733;</span> Value Finder
+            <Star className="nav-icon" size={17} strokeWidth={2} /> <span>Value Finder</span>
           </NavLink>
           <NavLink to="/ai-bettor" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-            <span className="nav-icon">&#9889;</span> AI Bettor
+            <Zap className="nav-icon" size={17} strokeWidth={2} /> <span>AI Bettor</span>
           </NavLink>
           <NavLink to="/backtest" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-            <span className="nav-icon">&#8855;</span> Backtest
+            <FlaskConical className="nav-icon" size={17} strokeWidth={2} /> <span>Backtest</span>
           </NavLink>
           <NavLink to="/analytics" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-            <span className="nav-icon">&#9776;</span> Analytics
+            <BarChart3 className="nav-icon" size={17} strokeWidth={2} /> <span>Analytics</span>
           </NavLink>
         </div>
 

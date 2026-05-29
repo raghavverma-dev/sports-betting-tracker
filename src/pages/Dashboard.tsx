@@ -54,7 +54,7 @@ export default function Dashboard() {
       </div>
 
       {chartData.length > 1 && (
-        <div className="card chart-card">
+        <div className="card chart-card load-rise" style={{ animationDelay: '0.30s' }}>
           <h2>Bankroll Over Time</h2>
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={chartData}>
@@ -78,7 +78,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      <div className="card">
+      <div className="card load-rise" style={{ animationDelay: '0.38s' }}>
         <h2>Recent Bets</h2>
         {recentBets.length === 0 ? (
           <p className="empty-text">No bets yet. Go to Bet Tracker to place your first bet!</p>
