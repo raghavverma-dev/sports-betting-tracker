@@ -1,5 +1,14 @@
 # BetEdge
 
+> Full-stack sports-market analytics platform: ingest live sportsbook
+> odds, de-vig them into fair probabilities, rank bets by expected
+> value, and backtest strategies on both forecast quality (Brier, log
+> loss, calibration) and portfolio outcomes (ROI, drawdown).
+> Python 3.12 / FastAPI / Postgres backend, React 19 / TypeScript frontend.
+
+<!-- TODO: add a screenshot or GIF of the Value Finder board here, e.g.:
+     ![Value Finder](docs/screenshots/value-finder.png) -->
+
 BetEdge is a full-stack sports-market analytics and bet-tracking
 platform. It pulls live odds from US sportsbooks, computes de-vigged
 market probabilities, ranks potential bets by expected value, tracks
@@ -123,10 +132,13 @@ npm run dev
 
 ## Loading real historical NBA data
 
-The synthetic corpus is fine for demos, but the model pipeline needs
-real data to be meaningful. The project ships an ingestion path that
-pulls game results from the official NBA stats API and attaches
-closing moneylines from SportsBookReviewsOnline (SBR) archives.
+The synthetic corpus is fine for demos, but a trained forecasting model
+(the planned next step — see Future Work) will need real data to be
+meaningful. The project ships the ingestion half of that pipeline: it
+pulls game results from the official NBA stats API and attaches closing
+moneylines from a CSV (e.g. a Kaggle odds dataset) or from
+SportsBookReviewsOnline (SBR) archives. Feature engineering and model
+training are not built yet.
 
 ### One-time setup
 
@@ -308,10 +320,16 @@ GitHub Actions workflow content is included at
 
 ## Future Work
 
-The core demo is complete: live odds ranking, paper bet tracking,
-bankroll analytics, and backtesting all run locally. The next meaningful
-extensions would be deployment, CI, and a real NBA feature/modeling
-pipeline trained on historical team data.
+The core platform is complete: live odds ranking, paper bet tracking,
+bankroll analytics, real-data ingestion, and a backtest/evaluation
+harness all run locally, with CI on every push.
+
+The next meaningful step is the forecasting model itself: engineer
+team-strength features from the ingested historical games, train a
+LightGBM moneyline classifier, and register it as a new `Strategy` that
+feeds its predicted probabilities into the existing backtest engine. The
+calibration and ROI harness is already built to measure whether that
+model improves on the de-vigged market baseline.
 
 ## Responsible use
 
