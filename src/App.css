@@ -2084,3 +2084,144 @@ select.config-input {
   font-size: 0.9rem;
   color: var(--text-muted);
 }
+
+/* Track-bet modal — replaces the native prompt() with a themed dialog. */
+.track-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 6, 8, 0.72);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 1000;
+  animation: track-fade 0.16s ease;
+}
+@keyframes track-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.track-modal {
+  width: 100%;
+  max-width: 420px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: calc(var(--radius) * 2);
+  padding: 1.5rem;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  animation: track-pop 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes track-pop {
+  from { opacity: 0; transform: translateY(12px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.track-modal-head {
+  margin-bottom: 1.1rem;
+}
+.track-modal-eyebrow {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--primary);
+}
+.track-modal-title {
+  margin: 0.3rem 0 0.15rem;
+  font-size: 1.3rem;
+  color: var(--text);
+}
+.track-modal-event {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.track-modal-meta {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  padding: 0.85rem;
+  margin-bottom: 1.25rem;
+  background: var(--bg-card-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.track-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.track-meta-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+}
+.track-meta-value {
+  font-size: 0.95rem;
+  color: var(--text);
+}
+.track-stake-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.5rem;
+}
+.track-stake-hint {
+  font-weight: 400;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.track-stake-field {
+  display: flex;
+  align-items: center;
+  background: var(--bg-card-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 0 0.85rem;
+  transition: border-color 0.15s ease;
+}
+.track-stake-field:focus-within {
+  border-color: var(--primary);
+}
+.track-stake-prefix {
+  font-size: 1.1rem;
+  color: var(--text-muted);
+  margin-right: 0.3rem;
+}
+.track-stake-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-size: 1.4rem;
+  font-weight: 600;
+  padding: 0.7rem 0;
+  font-family: 'JetBrains Mono', monospace;
+}
+.track-payout {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin: 0.85rem 0 1.4rem;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+.track-payout-total {
+  font-size: 0.8rem;
+  color: var(--text-faint);
+}
+.track-payout-empty {
+  color: var(--text-faint);
+}
+.track-modal-actions {
+  display: flex;
+  gap: 0.6rem;
+}
+.track-modal-actions .btn {
+  flex: 1;
+}

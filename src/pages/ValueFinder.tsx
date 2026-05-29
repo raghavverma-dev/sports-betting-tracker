@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, Fragment, type MouseEvent } from 'rea
 import {
   formatOdds,
   formatProbability,
+  formatCurrency,
+  calculatePayout,
   impliedProbability as americanToImplied,
 } from '../utils/odds';
 import { ApiError, fetchRankedOddsForSport, type RankedOddsBet } from '../utils/apiClient';
@@ -93,6 +95,8 @@ export default function ValueFinder() {
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('today');
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
+  const [pendingBet, setPendingBet] = useState<RankedOddsBet | null>(null);
+  const [stakeInput, setStakeInput] = useState('');
   const [showGuide, setShowGuide] = useState(() => {
     return localStorage.getItem('hide-betting-guide') !== 'true';
   });
@@ -175,10 +179,22 @@ export default function ValueFinder() {
     }
 
     const defaultStake = Math.max(1, Math.min(10, Math.floor(state.bankroll)));
-    const rawStake = window.prompt('Paper stake for this bet?', String(defaultStake));
-    if (rawStake == null) return;
+    setStakeInput(String(defaultStake));
+    setPendingBet(bet);
+  }
 
-    const stake = Number(rawStake);
+  function confirmTrackBet() {
+    const bet = pendingBet;
+    if (!bet) return;
+
+    const betType = TRACKABLE_BET_TYPES[bet.betType];
+    if (!betType) {
+      setError(`Cannot track market type: ${bet.betType}`);
+      setPendingBet(null);
+      return;
+    }
+
+    const stake = Number(stakeInput);
     if (!Number.isFinite(stake) || stake <= 0) {
       setError('Enter a valid positive stake to track this bet.');
       return;
@@ -207,6 +223,7 @@ export default function ValueFinder() {
 
     dispatch({ type: 'ADD_BET', payload: formData });
     setError(null);
+    setPendingBet(null);
     setSuccess(`Tracked ${bet.selection} at ${formatOdds(odds)} for $${stake.toFixed(2)}.`);
   }
 
@@ -636,6 +653,122 @@ export default function ValueFinder() {
           </div>
         </div>
       )}
+
+      {pendingBet && (
+        <TrackBetModal
+          bet={pendingBet}
+          stake={stakeInput}
+          onStakeChange={setStakeInput}
+          onConfirm={confirmTrackBet}
+          onCancel={() => setPendingBet(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function TrackBetModal({
+  bet,
+  stake,
+  onStakeChange,
+  onConfirm,
+  onCancel,
+}: {
+  bet: RankedOddsBet;
+  stake: string;
+  onStakeChange: (value: string) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const odds = bet.adjustedBestOdds ?? bet.bestOdds;
+  const book = bet.adjustedBestBook ?? bet.bestBook;
+  const ev = bet.adjustedEv ?? bet.ev;
+  const stakeNum = Number(stake);
+  const validStake = Number.isFinite(stakeNum) && stakeNum > 0;
+  const payout = validStake ? calculatePayout(stakeNum, odds) : 0;
+  const profit = payout - stakeNum;
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onCancel();
+      if (e.key === 'Enter' && validStake) onConfirm();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onCancel, onConfirm, validStake]);
+
+  return (
+    <div className="track-modal-overlay" onClick={onCancel}>
+      <div
+        className="track-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Track this bet"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="track-modal-head">
+          <span className="track-modal-eyebrow">Track a paper bet</span>
+          <h3 className="track-modal-title">{bet.selection}</h3>
+          <p className="track-modal-event">{bet.event}</p>
+        </div>
+
+        <div className="track-modal-meta">
+          <div className="track-meta-item">
+            <span className="track-meta-label">Odds</span>
+            <strong className="track-meta-value mono">{formatOdds(odds)}</strong>
+          </div>
+          <div className="track-meta-item">
+            <span className="track-meta-label">Book</span>
+            <strong className="track-meta-value">{book}</strong>
+          </div>
+          <div className="track-meta-item">
+            <span className="track-meta-label">EV</span>
+            <strong className={`track-meta-value mono ${ev >= 0 ? 'positive' : 'negative'}`}>
+              {ev > 0 ? '+' : ''}{ev.toFixed(1)}%
+            </strong>
+          </div>
+        </div>
+
+        <label className="track-stake-label" htmlFor="track-stake">
+          Stake
+          <span className="track-stake-hint">
+            Play money for record-keeping — no real wager is placed.
+          </span>
+        </label>
+        <div className="track-stake-field">
+          <span className="track-stake-prefix">$</span>
+          <input
+            id="track-stake"
+            type="number"
+            min={1}
+            step={1}
+            autoFocus
+            className="track-stake-input"
+            value={stake}
+            onChange={e => onStakeChange(e.target.value)}
+          />
+        </div>
+
+        <div className="track-payout">
+          {validStake ? (
+            <>
+              <span>To win <strong className="positive mono">{formatCurrency(profit)}</strong></span>
+              <span className="track-payout-total">
+                Returns {formatCurrency(payout)}
+              </span>
+            </>
+          ) : (
+            <span className="track-payout-empty">Enter a positive amount.</span>
+          )}
+        </div>
+
+        <div className="track-modal-actions">
+          <button className="btn btn-secondary" onClick={onCancel}>Cancel</button>
+          <button className="btn btn-primary" onClick={onConfirm} disabled={!validStake}>
+            Track bet
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
