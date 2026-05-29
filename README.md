@@ -85,7 +85,7 @@ frontend UX, backend API design, and quantitative engineering:
 - `src/betedge/models.py` — SQLAlchemy 2.0 ORM models
 - `src/betedge/schemas.py` — Pydantic v2 request/response schemas
 - `alembic/` — versioned migrations
-- `tests/` — pytest suite (81 tests, in-memory SQLite fixtures)
+- `tests/` — pytest suite (87 tests, in-memory SQLite fixtures)
 
 **Frontend (`src/`)**
 - `pages/Backtest.tsx` — new page that drives the backend: run a
@@ -151,9 +151,12 @@ pip install -e '.[ml]'   # pulls nba_api, openpyxl, lightgbm, etc.
 ### Fast path: bulk-ingest many seasons from one CSV
 
 The public Kaggle dataset `nba_2008-2025.csv` ships game results *and*
-closing moneylines in a single wide CSV, so one offline pass populates
-both games and odds — no network calls, fully reproducible. This is how
-the shipped model corpus (16 seasons, ~18.5k games) was built:
+closing odds in a single wide CSV, so one offline pass populates both
+games and odds — no network calls, fully reproducible. Each season pass
+writes three markets per game: the moneyline (`h2h`), the point spread
+(`spreads`, signed per side), and the game total (`totals`, over/under),
+so the engine can backtest moneyline *and* against-the-spread bets. This
+is how the shipped model corpus (16 seasons, ~18.5k games) was built:
 
 ```bash
 # Each call loads one season's games + consensus closing moneylines.
@@ -241,7 +244,7 @@ Interview talking points:
   migrations, and an append-only bankroll ledger.
 - **Quant logic:** odds normalization, de-vigging, EV ranking, Kelly
   sizing, and outlier/stale line handling.
-- **Testing/quality:** 81 backend tests plus Ruff, mypy, ESLint, and a
+- **Testing/quality:** 87 backend tests plus Ruff, mypy, ESLint, and a
   passing frontend production build.
 - **Tradeoffs:** synthetic data is reproducible for demos; real data
   ingestion exists but would need a richer feature pipeline before any
@@ -263,6 +266,11 @@ docker compose exec backend betedge backtest run \
     --min-ev 2.0 \
     --kelly-fraction 0.25 \
     --max-stake-percent 5
+
+# Against-the-spread instead of moneyline: settle each bet on whether the
+# side covered its signed line (exact-line games push and refund the stake).
+docker compose exec backend betedge backtest run \
+    --strategy market-baseline --sport NBA --market spreads
 
 # List recent runs.
 docker compose exec backend betedge backtest list
@@ -316,7 +324,7 @@ npm run build        # tsc + vite bundle
 npm run lint         # eslint
 ```
 
-Current state: 81 backend tests, zero ESLint issues, zero ruff issues,
+Current state: 87 backend tests, zero ESLint issues, zero ruff issues,
 zero mypy issues, and a passing production frontend build.
 
 GitHub Actions workflow content is included at
@@ -386,7 +394,7 @@ Design notes that matter:
 
 The model trains on **16 ingested NBA seasons (2008-09 .. 2023-24, ~18.5k
 games)**. On the held-out **2021-22** season it lands around **Brier
-0.227 / log loss 0.646**, versus **~0.209 / 0.605** for the de-vigged
+0.224 / log loss 0.642**, versus **~0.209 / 0.605** for the de-vigged
 closing line on the *same* games. The market still wins — as it should.
 NBA closing lines are very sharp, and a model with no player, injury, or
 lineup data is not expected to beat them. (Multi-season + Elo did narrow

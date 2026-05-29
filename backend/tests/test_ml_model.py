@@ -168,3 +168,51 @@ def test_model_source_excludes_training_games(session: Session, tmp_path: Path) 
 
     assert source.home_win_probability(train_game, 0.5) is None  # excluded
     assert source.home_win_probability(test_game, 0.5) is not None  # served
+
+
+def test_source_rejects_sport_mismatch(session: Session, tmp_path: Path) -> None:
+    """A model trained on one sport must refuse to score another — its
+    feature rows (and Elo state) would be meaningless across sports."""
+    from betedge.ml.model import ModelProbabilitySource, train_model
+
+    _seed_learnable_corpus(session, n=200)
+    model_path = tmp_path / "m.joblib"
+    train_model(session, sport="NBA", season="2023-24-real", model_path=model_path)
+
+    with pytest.raises(ValueError, match="trained on sport"):
+        ModelProbabilitySource(session, sport="NHL", model_path=model_path)
+
+
+def test_predictions_use_training_scope_not_requested_season(
+    session: Session, tmp_path: Path
+) -> None:
+    """Elo carries across seasons, so a held-out game's feature vector
+    depends on the whole training corpus. The serving source must rebuild
+    features over the *training* scope, so the prediction for a given game
+    is identical no matter which season the caller asks the engine to
+    iterate. This is the guard against silent train/serve Elo skew."""
+    from betedge.ml.model import ModelProbabilitySource, train_model
+
+    # Two seasons in the corpus; train across BOTH (season=None).
+    _seed_learnable_corpus(session, n=200, seed=1)
+    # Re-tag half the games into a second season so the corpus spans seasons.
+    games = session.query(HistoricalGame).order_by(HistoricalGame.commence_time).all()
+    for g in games[: len(games) // 2]:
+        g.season = "2022-23-real"
+    session.commit()
+
+    model_path = tmp_path / "m.joblib"
+    train_model(session, sport="NBA", season=None, model_path=model_path)
+
+    # Asking for one specific season must not change any served prediction,
+    # because the source ignores the requested season for feature-building.
+    src_all = ModelProbabilitySource(session, season=None, model_path=model_path)
+    src_one = ModelProbabilitySource(session, season="2022-23-real", model_path=model_path)
+
+    served = [
+        (src_all.home_win_probability(g, 0.5), src_one.home_win_probability(g, 0.5))
+        for g in session.query(HistoricalGame).all()
+    ]
+    both_served = [(a, b) for a, b in served if a is not None and b is not None]
+    assert both_served  # some games are held out and scored by both
+    assert all(a == b for a, b in both_served)

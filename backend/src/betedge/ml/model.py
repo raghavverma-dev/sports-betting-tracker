@@ -94,6 +94,15 @@ class _Bundle:
     # never scores the model on games it has already seen — the difference
     # between an honest held-out number and grading its own work.
     train_game_ids: frozenset[int]
+    # The corpus scope the features were built from. Elo persists across
+    # seasons and regresses at boundaries, so a game's feature vector depends
+    # on *which* games preceded it. The serving source must rebuild features
+    # over the identical scope or the same game gets a different elo_diff at
+    # serve time than it had at train time — a silent train/serve skew. These
+    # are validated on load to forbid that.
+    sport: str
+    season: str | None
+    window: int
 
 
 def train_model(
@@ -113,16 +122,18 @@ def train_model(
     ``2021-22-real``) when given; otherwise every game for ``sport`` is
     used.
 
-    The split is two-way and strictly chronological:
-      [ train (fit booster + cross-validated calibration) | test (held out) ]
+    The split is strictly chronological:
+      [ train [ fit | val ] | test (held out) ]
     Calibration uses ``CalibratedClassifierCV`` with k-fold cross-validation
-    *inside* the train slice: each fold's calibrator is fit on data the
-    matching booster never saw, so calibration doesn't overfit the way a
-    single small validation slice does. We keep the calibrated predictor only
-    if it beats the raw booster on the held-out test slice; the test number is
-    therefore always the honest one and never used to make the keep decision
-    in a way that could flatter it (we report both raw and calibrated either
-    way).
+    *inside* the train slice, so each fold's isotonic map is fit on data the
+    matching booster never saw — far more stable than one tiny validation
+    slice. Whether to keep calibration is decided on a validation tail carved
+    from the END of the train slice (never the test slice): we fit a trial
+    booster and trial calibrator on the earlier part, compare them on the
+    tail, and keep calibration only if it wins there. The chosen predictor is
+    then refit on the full train slice. The test slice plays no part in that
+    decision, so the reported test Brier/log loss (both raw and calibrated)
+    is a clean, untouched held-out number.
     """
     lgb, pd, joblib = _require_ml_deps()
     from sklearn.calibration import CalibratedClassifierCV
@@ -157,40 +168,59 @@ def train_model(
     train_X = _frame(pd, train_rows)
     train_y = [r.home_win for r in train_rows]
 
-    booster = _new_booster()
-    booster.fit(train_X, train_y)
-
-    # Cross-validated isotonic calibration. CalibratedClassifierCV refits the
-    # booster on each of k chronological folds and fits an isotonic map on the
-    # held-out fold, then averages — far more stable than one tiny val slice.
-    # Needs enough rows per fold and both classes present to be meaningful.
-    calibrated_predictor = None
-    if len(train_rows) >= calibration_folds * 20 and len(set(train_y)) == 2:
+    def _fit_calibrated(fit_rows: list[FeatureRow]) -> Any | None:
+        """Cross-validated isotonic calibration over ``fit_rows``, or None if
+        there isn't enough data / both classes. CalibratedClassifierCV refits
+        the booster on each of k chronological folds and fits an isotonic map
+        on the held-out fold, then averages — far more stable than one tiny
+        validation slice."""
+        ys = [r.home_win for r in fit_rows]
+        if len(fit_rows) < calibration_folds * 20 or len(set(ys)) != 2:
+            return None
         from sklearn.model_selection import TimeSeriesSplit
 
-        candidate = CalibratedClassifierCV(
+        c = CalibratedClassifierCV(
             estimator=_new_booster(),
             method="isotonic",
             cv=TimeSeriesSplit(n_splits=calibration_folds),
         )
-        candidate.fit(train_X, train_y)
-        calibrated_predictor = candidate
+        c.fit(_frame(pd, fit_rows), ys)
+        return c
 
+    # Decide whether calibration helps on a validation tail carved from the
+    # END of the train slice — never the test slice. This keeps the test
+    # number a pure, untouched report: it plays no part in the keep decision.
+    keep_calibrated = False
+    val_start = int(len(train_rows) * 0.85)
+    fit_rows, val_rows = train_rows[:val_start], train_rows[val_start:]
+    if val_rows:
+        trial_booster = _new_booster()
+        trial_booster.fit(_frame(pd, fit_rows), [r.home_win for r in fit_rows])
+        trial_cal = _fit_calibrated(fit_rows)
+        if trial_cal is not None:
+            val_y = [float(r.home_win) for r in val_rows]
+            val_raw = _raw_predict(trial_booster, pd, val_rows)
+            val_cal = _raw_predict(trial_cal, pd, val_rows)
+            keep_calibrated = brier_score(val_cal, val_y) < brier_score(val_raw, val_y)
+
+    # Fit the chosen predictor type on the FULL train slice for production.
+    booster = _new_booster()
+    booster.fit(train_X, train_y)
+    predictor: Any = booster
+    if keep_calibrated:
+        calibrated_full = _fit_calibrated(train_rows)
+        if calibrated_full is not None:
+            predictor = calibrated_full
+        else:
+            keep_calibrated = False
+
+    # Report both raw and calibrated on the held-out test slice. Neither
+    # number influenced the keep decision above.
     test_raw = _raw_predict(booster, pd, test_rows)
     test_cal = (
-        _raw_predict(calibrated_predictor, pd, test_rows)
-        if calibrated_predictor is not None
-        else test_raw
+        _raw_predict(predictor, pd, test_rows) if keep_calibrated else test_raw
     )
     test_y = [float(r.home_win) for r in test_rows]
-
-    # Keep calibration only if it actually helps on the held-out slice.
-    keep_calibrated = (
-        calibrated_predictor is not None
-        and bool(test_rows)
-        and brier_score(test_cal, test_y) < brier_score(test_raw, test_y)
-    )
-    predictor = calibrated_predictor if keep_calibrated else booster
 
     importance = {
         col: float(imp)
@@ -204,6 +234,9 @@ def train_model(
         trained_at=datetime.now(UTC).isoformat(),
         train_rows=len(train_rows),
         train_game_ids=frozenset(r.game_id for r in train_rows),
+        sport=sport,
+        season=season,
+        window=window,
     )
     model_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(bundle, model_path)
@@ -263,7 +296,6 @@ class ModelProbabilitySource:
         *,
         sport: str = "NBA",
         season: str | None = None,
-        window: int = 10,
         model_path: Path = DEFAULT_MODEL_PATH,
     ) -> None:
         _lgb, pd, joblib = _require_ml_deps()
@@ -277,9 +309,27 @@ class ModelProbabilitySource:
                 "Saved model's feature columns don't match the current "
                 "feature set — retrain with `betedge ml train`."
             )
+        # The sport must match: a model trained on NBA can't score NHL games,
+        # and feature rows built over the wrong sport are meaningless.
+        if sport != bundle.sport:
+            raise ValueError(
+                f"Model was trained on sport={bundle.sport!r} but asked to "
+                f"score sport={sport!r}. Retrain or pass the matching sport."
+            )
+        # Features are rebuilt over the *training* scope (sport/season/window),
+        # NOT the caller's requested season. This is what guarantees a game's
+        # Elo-based features are identical at serve time to what they were at
+        # train time — Elo carries across seasons, so scoring a single season
+        # in isolation would reset every rating to 1500 and silently change
+        # elo_diff (the top feature). The caller's `season` is only the
+        # engine's iteration filter, applied downstream of this scored map.
         self._pd = pd
         self._predictions = self._score_corpus(
-            bundle, session, sport=sport, season=season, window=window
+            bundle,
+            session,
+            sport=bundle.sport,
+            season=bundle.season,
+            window=bundle.window,
         )
 
     def _score_corpus(
